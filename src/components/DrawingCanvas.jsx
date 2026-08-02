@@ -23,6 +23,12 @@ export default function DrawingCanvas({
   const isDrawingRef = useRef(false);
   const currentStrokePointsRef = useRef([]);
 
+  // videoElement is either a <video> (videoWidth/videoHeight) or an <img>
+  // for planning drawings (naturalWidth/naturalHeight) — the two APIs
+  // don't share property names, so every size read goes through these.
+  const getMediaWidth = (el) => el?.videoWidth || el?.naturalWidth || 0;
+  const getMediaHeight = (el) => el?.videoHeight || el?.naturalHeight || 0;
+
   const clearCanvas = (all = false) => {
     console.log("🧼 [DrawingCanvas.clearCanvas] all =", all, " currentFrame =", currentFrame,
       " hasEntry =", !!frameAnnotations[currentFrame],
@@ -66,7 +72,7 @@ export default function DrawingCanvas({
     const canvas = canvasRef.current;
     const video = videoElement;
 
-    if (video.videoWidth === 0 || video.videoHeight === 0) {
+    if (getMediaWidth(video) === 0 || getMediaHeight(video) === 0) {
       requestAnimationFrame(() => setTimeout(recomputeCanvasSize, 50));
       return;
     }
@@ -74,8 +80,8 @@ export default function DrawingCanvas({
     const rect = video.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
 
-    canvas.width = video.videoWidth * dpr;
-    canvas.height = video.videoHeight * dpr;
+    canvas.width = getMediaWidth(video) * dpr;
+    canvas.height = getMediaHeight(video) * dpr;
     canvas.style.width = `${rect.width}px`;
     canvas.style.height = `${rect.height}px`;
 
@@ -317,9 +323,9 @@ export default function DrawingCanvas({
     const normX = (e.clientX - rect.left) / rect.width;
     const normY = (e.clientY - rect.top) / rect.height;
 
-    // 🟩 Convert normalized coords to actual video pixel space
-    const x = normX * video.videoWidth;
-    const y = normY * video.videoHeight;
+    // 🟩 Convert normalized coords to actual media pixel space
+    const x = normX * getMediaWidth(video);
+    const y = normY * getMediaHeight(video);
 
     return { x, y };
   };

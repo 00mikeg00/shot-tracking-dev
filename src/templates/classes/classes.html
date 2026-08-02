@@ -71,13 +71,6 @@
                     onclick="confirmDeleteClass({{ class_item['id'] }})">
                     Delete
                   </button>
-                  {% if 'Summer' in class_item['semester'] %}
-                  <a href="{{ url_for('classes.export_students_json', class_id=class_item['id']) }}"
-                    class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded-lg"
-                    title="Download students.json for GAA Home Tools">
-                    Students JSON
-                  </a>
-                  {% endif %}
                 </td>
               </tr>
               {% endfor %}

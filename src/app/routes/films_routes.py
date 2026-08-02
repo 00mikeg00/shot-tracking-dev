@@ -1932,7 +1932,12 @@ def view_shots_route(scene_id):
         # Attach current status and color
         for step_id, step_data in steps_map.items():
             assignment = step_status_map.get(step_id, {})
-            current_status = assignment.get("status", "Not Started")
+            # Default to this step's actual first node (e.g. "Ready to Start") when no
+            # shot_step_assignments row exists yet, so the dropdown always has a real,
+            # matching option to select instead of silently falling back to whichever
+            # node happens to sort first.
+            default_status = step_data["status_options"][0]["name"] if step_data["status_options"] else "Not Started"
+            current_status = assignment.get("status", default_status)
             status_color = next((opt["color"] for opt in step_data["status_options"] if opt["name"] == current_status), "#cccccc")
 
             # Build the step structure

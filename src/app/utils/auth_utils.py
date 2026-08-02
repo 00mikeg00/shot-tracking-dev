@@ -83,8 +83,8 @@ def verify_password(stored_hash, provided_password):
 def set_user_session(user):
     session.clear()
     session['user_id'] = user['id']
-    session['login_name'] = user['name']
-    session['username'] = user['name']        # add this
+    session['login_name'] = user['login_name']
+    session['username'] = user['name']
 
     raw_roles = get_user_roles(user['id'])
 

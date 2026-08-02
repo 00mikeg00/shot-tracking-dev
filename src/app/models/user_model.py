@@ -14,14 +14,15 @@ class User:
         return [dict(user) for user in users]
 
     @staticmethod
-    def create(name: str, login_name: str, email: str, password: str) -> int:
+    def create(name: str, login_name: str, email: str, password: str, graduation_year: int = None) -> int:
         return modify_db(
-            'INSERT INTO users (name, login_name, email, password_hash) VALUES (?, ?, ?, ?)',
-            (name, login_name, email, password)
+            'INSERT INTO users (name, login_name, email, password_hash, graduation_year) VALUES (?, ?, ?, ?, ?)',
+            (name, login_name, email, password, graduation_year)
         )
 
     @staticmethod
-    def update(user_id: int, name: str = None, login_name: str = None, email: str = None, permission_level: int = None):
+    def update(user_id: int, name: str = None, login_name: str = None, email: str = None,
+               permission_level: int = None, graduation_year="__unset__"):
 
         fields = []
         params = []
@@ -38,6 +39,9 @@ class User:
         if permission_level is not None:
             fields.append("permission_level = ?")
             params.append(permission_level)
+        if graduation_year != "__unset__":
+            fields.append("graduation_year = ?")
+            params.append(graduation_year if graduation_year not in (None, "") else None)
 
         if not fields:
             raise ValueError("No fields provided for update.")
@@ -79,10 +83,8 @@ class User:
             print(f"[OK] Successfully deleted user {user_id} and all associated records.")
         except Exception as e:
             conn.rollback()
-            print(f"âŒ Error deleting user {user_id}: {e}")
+            print(f"❌ Error deleting user {user_id}: {e}")
             raise e
-
-
 
     @staticmethod
     def find_by_login_name(login_name: str) -> dict:
@@ -94,7 +96,7 @@ class User:
         search_term = f"%{search_term}%"
         users = query_db('SELECT * FROM users WHERE name LIKE ?', (search_term,))
         return [dict(user) for user in users]
-    
+
     @staticmethod
     def get_group_ids(user_id: int) -> list:
         db = get_db()
@@ -123,7 +125,7 @@ class User:
         placeholders = ",".join("?" for _ in group_ids)
         query = f"SELECT * FROM users WHERE id IN (SELECT user_id FROM user_groups WHERE group_id IN ({placeholders}))"
         return [dict(row) for row in db.execute(query, group_ids)]
-    
+
     @staticmethod
     def get_enrolled(class_id: int, semester: str = None, user_id: int = None) -> list | bool:
         db = get_db()
@@ -150,7 +152,6 @@ class User:
 
         return [dict(row) for row in result.fetchall()]
 
-
     @staticmethod
     def get_not_in_class(class_id: int) -> list:
         db = get_db()
@@ -165,12 +166,12 @@ class User:
             ORDER BY u.name
         """
         return [dict(row) for row in db.execute(query, (class_id,))]
-    
+
     @staticmethod
     def get_not_in_any_active_class() -> list:
         db = get_db()
         query = """
-            SELECT u.id, u.name, u.email, u.archived
+            SELECT u.id, u.name, u.email, u.archived, u.graduation_year
             FROM users u
             WHERE u.id NOT IN (
                 SELECT ce.user_id
@@ -180,6 +181,3 @@ class User:
             ) AND u.archived = 0
         """
         return [dict(row) for row in db.execute(query)]
-
-
-

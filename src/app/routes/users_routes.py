@@ -90,12 +90,15 @@ def add_user():
 
             hashed_password = hash_password(form['password'])
 
+            graduation_year = form.get('graduation_year') or None
+
             # [OK] Create user with constructed email
             user_id = User.create(
                 name=form['name'],
                 login_name=form['login_name'],
                 email=full_email,
-                password=hashed_password
+                password=hashed_password,
+                graduation_year=graduation_year
             )
 
 
@@ -136,12 +139,14 @@ def edit_user(user_id):
             new_name = form_data['name']
             new_login_name = form_data['login_name']
             new_email = form_data['email']
+            new_graduation_year = form_data.get('graduation_year') or None
 
             User.update(
                 user_id=user_id,
                 name=new_name,
                 login_name=new_login_name,
-                email=new_email
+                email=new_email,
+                graduation_year=new_graduation_year
             )
 
 

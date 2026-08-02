@@ -13,8 +13,8 @@
                         <th class="border border-gray-300 p-3">
                             <input type="checkbox" id="select-all" onclick="toggleSelectAll()"> <!-- Select All -->
                         </th>
-                        <th class="border border-gray-300 p-3 text-left bg-gray-200 text-black">Title</th>
-                        <th class="border border-gray-300 p-3 text-left bg-gray-200 text-black">Release Date</th>
+                        <th class="border border-gray-300 p-3 text-left bg-gray-200 text-black">Name</th>
+                        <th class="border border-gray-300 p-3 text-left bg-gray-200 text-black">Semester</th>
                         <th class="border border-gray-300 p-3 text-left bg-gray-200 text-black">Director</th>
                     </tr>
                 </thead>
@@ -24,9 +24,9 @@
                         <td class="border border-gray-300 p-3 text-center text-black">
                             <input type="checkbox" name="film_ids" value="{{ film.id }}">
                         </td>
-                        <td class="border border-gray-300 p-3">{{ film.title }}</td>
-                        <td class="border border-gray-300 p-3">{{ film.release_date }}</td>
-                        <td class="border border-gray-300 p-3">{{ film.director }}</td>
+                        <td class="border border-gray-300 p-3">{{ film.name }}</td>
+                        <td class="border border-gray-300 p-3">{{ film.semester_label or '—' }}</td>
+                        <td class="border border-gray-300 p-3">{{ film.director_name or '—' }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -38,6 +38,46 @@
             </button>
         </div>
     </form>
+<h2 class="text-xl font-bold text-white mt-10 mb-4">Archived Films</h2>
+<form id="restore-form" method="POST" action="{{ url_for('admin.restore_films') }}">
+    <div class="overflow-x-auto bg-white p-6 rounded-lg shadow-lg">
+        <table class="table">
+            <thead>
+                <tr class="bg-gray-200">
+                    <th class="border border-gray-300 p-3">
+                        <input type="checkbox" id="select-all-archived" onclick="toggleSelectAllArchived()">
+                    </th>
+                    <th class="border border-gray-300 p-3 text-left bg-gray-200 text-black">Name</th>
+                    <th class="border border-gray-300 p-3 text-left bg-gray-200 text-black">Semester</th>
+                    <th class="border border-gray-300 p-3 text-left bg-gray-200 text-black">Director</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for film in archived_films %}
+                <tr class="hover:bg-gray-100">
+                    <td class="border border-gray-300 p-3 text-center text-black">
+                        <input type="checkbox" name="film_ids" value="{{ film.id }}">
+                    </td>
+                    <td class="border border-gray-300 p-3">{{ film.name }}</td>
+                    <td class="border border-gray-300 p-3">{{ film.semester_label or '—' }}</td>
+                    <td class="border border-gray-300 p-3">{{ film.director_name or '—' }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="p-3 text-center text-gray-500">No archived films.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="flex justify-end mt-4">
+        <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700">
+            Restore Selected
+        </button>
+    </div>
+</form>
+
+
 </div>
 
 <script>
@@ -46,6 +86,13 @@
         const selectAll = document.getElementById('select-all');
         const checkboxes = document.querySelectorAll('input[name="film_ids"]');
         checkboxes.forEach(cb => cb.checked = selectAll.checked);
+    }
+</script>
+
+<script>
+    function toggleSelectAllArchived() {
+        const selectAll = document.getElementById('select-all-archived');
+        document.querySelectorAll('input[name="film_ids"]').forEach(cb => cb.checked = selectAll.checked);
     }
 </script>
 {% endblock %}

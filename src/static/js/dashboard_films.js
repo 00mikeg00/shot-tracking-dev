@@ -162,6 +162,63 @@ function handleFilmStatusChange(selectEl) {
 }
 
 
+// Same not-started/in-progress/approved bucketing as the assignments
+// dashboard's computeAssignmentBadge, adapted to film steps' field names
+// (status, not assignment_status; no server-computed current_step here).
+function computeShotBadge(steps) {
+  let anyInProgress = false;
+  let allTerminal = steps.length > 0;
+
+  for (const step of steps) {
+    const opts = step.dropdown_options || [];
+    const first = opts[0]?.name;
+    const last = opts[opts.length - 1]?.name;
+    const status = step.status;
+    const isTerminal = opts.length > 0 && status === last;
+    const isNotStarted = !status || (opts.length > 0 && status === first);
+
+    if (!isTerminal) allTerminal = false;
+    if (!isNotStarted && !isTerminal) anyInProgress = true;
+  }
+
+  if (anyInProgress) return { label: "In progress", cls: "bg-yellow-600 text-yellow-100" };
+  if (allTerminal) return { label: "Approved", cls: "bg-green-700 text-green-100" };
+  return { label: "Not started", cls: "bg-gray-600 text-gray-200" };
+}
+
+function buildShotStatusDropdown(shot, step) {
+  const dropdown = document.createElement("select");
+  dropdown.className = "status-dropdown bg-gray-200 text-black px-2 py-1 rounded text-sm cursor-pointer";
+  dropdown.setAttribute("data-step-id", step.step_id);
+
+  const isThumbnail = shot.shot_number === "—" || shot.shot_number === "-";
+
+  if (isThumbnail && shot.scene_id != null) {
+    // Thumbnails use scene-level updates
+    dropdown.setAttribute("data-scene-id", shot.scene_id);
+    dropdown.setAttribute("data-task-type", "scene");
+  } else if (shot.shot_id != null) {
+    // Real shots
+    dropdown.setAttribute("data-shot-id", shot.shot_id);
+    dropdown.setAttribute("data-task-type", "shot");
+  }
+
+  (step.dropdown_options || []).forEach(opt => {
+    const option = document.createElement("option");
+    option.value = opt.name;
+    option.textContent = opt.name;
+    option.selected = (opt.name?.toLowerCase() === (step.status || "").toLowerCase());
+    option.style.backgroundColor = opt.color;
+    option.setAttribute("data-color", opt.color);
+    dropdown.appendChild(option);
+  });
+
+  dropdown.onchange = () => handleFilmStatusChange(dropdown);
+  setTimeout(() => updateDropdownColor(dropdown), 0);
+
+  return dropdown;
+}
+
 async function fetchDashboardFilmShots() {
   try {
     console.log("📡 Fetching dashboard data...");
@@ -189,38 +246,36 @@ async function fetchDashboardFilmShots() {
 
       film.shots = sortShots(film.shots);
 
-      const filmSection = document.createElement("div");
-      filmSection.className = "mb-4";
       const filmToggleId = `film-${index}`;
 
+      const filmSection = document.createElement("div");
+      filmSection.className = "bg-gray-800 rounded-lg overflow-hidden mb-4";
+
       const filmHeader = document.createElement("div");
-      filmHeader.className = "flex justify-between items-center bg-slate-700 text-white font-bold px-4 py-2 border-b border-slate-600";
+      filmHeader.className = "flex justify-between items-center bg-gray-600 px-4 py-3 cursor-pointer";
+      filmHeader.innerHTML = `
+        <div class="flex items-center gap-2">
+          <span class="chevron text-white">▾</span>
+          <span class="text-white font-bold text-lg">${film.title}</span>
+        </div>
+      `;
 
-      const filmTitle = document.createElement("span");
-      filmTitle.textContent = film.title;
-      filmTitle.className = "cursor-pointer";
-      filmTitle.onclick = () => {
-        const body = document.getElementById(filmToggleId);
-        if (body) body.classList.toggle("hidden");
-      };
-
-      // 📜 View Script button
       const scriptBtn = document.createElement("a");
       scriptBtn.textContent = "📜 View Script";
       scriptBtn.href = `/dashboard/films/get_script/${encodeURIComponent(film.title)}`;
       scriptBtn.target = "_blank";
       scriptBtn.className = "bg-green-700 hover:bg-green-800 text-white px-3 py-1 rounded text-sm";
-
-      filmHeader.appendChild(filmTitle);
+      scriptBtn.onclick = (e) => e.stopPropagation();
       filmHeader.appendChild(scriptBtn);
-
-      filmHeader.onclick = () => {
-        const body = document.getElementById(filmToggleId);
-        if (body) body.classList.toggle("hidden");
-      };
 
       const filmBody = document.createElement("div");
       filmBody.id = filmToggleId;
+      filmBody.className = "p-4 space-y-3";
+
+      filmHeader.onclick = () => {
+        const isHidden = filmBody.classList.toggle("hidden");
+        filmHeader.querySelector(".chevron").textContent = isHidden ? "▸" : "▾";
+      };
 
       const groupedByScene = {};
       const thumbnailTasks = film.shots.filter(s => s.shot_id === null);
@@ -242,98 +297,77 @@ async function fetchDashboardFilmShots() {
         const sceneToggleId = `${filmToggleId}-scene-${sceneNum}`;
         const isThumbnailSection = sceneNum === "__thumbnails__";
 
+        const sceneSection = document.createElement("div");
+        sceneSection.className = "bg-gray-900 rounded-lg overflow-hidden";
+
         const sceneHeader = document.createElement("div");
-        sceneHeader.className = "cursor-pointer text-yellow-400 text-sm font-semibold px-4 py-1 bg-slate-800 border-b border-slate-600";
-        sceneHeader.textContent = isThumbnailSection ? "Thumbnails & Storyboards" : `Scene ${sceneNum}`;
-        sceneHeader.onclick = () => {
-          const section = document.getElementById(sceneToggleId);
-          if (section) section.classList.toggle("hidden");
-        };
+        sceneHeader.className = "flex items-center gap-2 cursor-pointer text-yellow-400 text-sm font-semibold px-4 py-2 bg-gray-700";
+        sceneHeader.innerHTML = `
+          <span class="chevron">▾</span>
+          <span>${isThumbnailSection ? "Thumbnails & Storyboards" : `Scene ${sceneNum}`}</span>
+        `;
 
         const sceneBody = document.createElement("div");
         sceneBody.id = sceneToggleId;
+        sceneBody.className = "grid gap-3 p-3";
+        sceneBody.style.gridTemplateColumns = "repeat(auto-fit,minmax(220px,1fr))";
 
-        const table = document.createElement("table");
-        table.className = "min-w-full text-white text-sm border-collapse";
-
-        const thead = document.createElement("thead");
-        thead.innerHTML = `
-          <tr class="bg-slate-600 text-white uppercase">
-            <th class="px-4 py-2 text-left">Shot</th>
-            <th class="px-4 py-2 text-left">Step</th>
-            <th class="px-4 py-2 text-left">Status</th>
-            <th class="px-4 py-2 text-left">Due</th>
-          </tr>
-        `;
-
-        const tbody = document.createElement("tbody");
-
-
-        
+        sceneHeader.onclick = () => {
+          const isHidden = sceneBody.classList.toggle("hidden");
+          sceneHeader.querySelector(".chevron").textContent = isHidden ? "▸" : "▾";
+        };
 
         shots.forEach(shot => {
-          shot.steps.forEach(step => {
-            if (step.status?.toLowerCase() === "approved") return;
+          const visibleSteps = shot.steps.filter(step => step.status?.toLowerCase() !== "approved");
+          const badge = computeShotBadge(shot.steps);
 
-            const dropdown = document.createElement("select");
-            dropdown.className = "status-dropdown bg-gray-200 text-black px-2 py-1 rounded text-sm cursor-pointer";
-            dropdown.setAttribute("data-step-id", step.step_id);
+          const card = document.createElement("div");
+          card.className = "bg-gray-800 rounded-lg p-3";
+          card.innerHTML = `
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-white font-bold text-sm">Shot ${shot.shot_number || "—"}</span>
+              <span class="text-xs px-2 py-1 rounded ${badge.cls}">${badge.label}</span>
+            </div>
+          `;
 
-            const isThumbnail = shot.shot_number === "—" || shot.shot_number === "-";
+          if (visibleSteps.length === 0) {
+            const none = document.createElement("div");
+            none.className = "text-xs text-gray-500";
+            none.textContent = "Nothing left to do";
+            card.appendChild(none);
+          }
 
-            if (isThumbnail && shot.scene_id != null) {
-              // 🟡 Thumbnails use scene-level updates
-              dropdown.setAttribute("data-scene-id", shot.scene_id);
-              dropdown.setAttribute("data-task-type", "scene");
-            } else if (shot.shot_id != null) {
-              // 🎬 Real shots
-              dropdown.setAttribute("data-shot-id", shot.shot_id);
-              dropdown.setAttribute("data-task-type", "shot");
-            }
-            
-
-            (step.dropdown_options || []).forEach(opt => {
-              const option = document.createElement("option");
-              option.value = opt.name;
-              option.textContent = opt.name;
-              option.selected = (opt.name?.toLowerCase() === (step.status || "").toLowerCase());
-              option.style.backgroundColor = opt.color;
-              option.setAttribute("data-color", opt.color);  // ✅ add this line
-              dropdown.appendChild(option);
-            });
-
-            dropdown.onchange = () => handleFilmStatusChange(dropdown);
-            setTimeout(() => updateDropdownColor(dropdown), 0);
-
-            const tr = document.createElement("tr");
-            tr.className = "bg-slate-700 border-b border-slate-600";
+          visibleSteps.forEach(step => {
+            const stepRow = document.createElement("div");
+            stepRow.className = "flex items-center justify-between gap-2 text-sm mt-1";
 
             if (step.scene_id !== undefined && step.scene_id !== null) {
-              tr.setAttribute("data-scene-id", step.scene_id);
+              stepRow.setAttribute("data-scene-id", step.scene_id);
             }
-
-            // 🟡 Only set shot-id for real shots (not thumbnails)
             if (shot.shot_id !== undefined && shot.shot_id !== null && shot.shot_number !== "—") {
-              tr.setAttribute("data-shot-id", shot.shot_id);
+              stepRow.setAttribute("data-shot-id", shot.shot_id);
             }
 
+            const label = document.createElement("span");
+            label.className = "text-gray-300";
+            label.textContent = step.step_name || `Step ${step.step_id}`;
 
-            tr.innerHTML = `
-              <td class="px-4 py-2">Shot ${shot.shot_number || "—"}</td>
-              <td class="px-4 py-2">${step.step_name || `Step ${step.step_id}`}</td>
-              <td class="px-4 py-2"></td>
-              <td class="px-4 py-2">${step.due_date || "--"}</td>
-            `;
-            tr.children[2].appendChild(dropdown);
-            tbody.appendChild(tr);
+            const due = document.createElement("span");
+            due.className = "text-gray-500 text-xs";
+            due.textContent = step.due_date || "--";
+
+            stepRow.appendChild(label);
+            stepRow.appendChild(buildShotStatusDropdown(shot, step));
+            stepRow.appendChild(due);
+            card.appendChild(stepRow);
           });
+
+          sceneBody.appendChild(card);
         });
 
-        table.appendChild(thead);
-        table.appendChild(tbody);
-        sceneBody.appendChild(table);
-        filmBody.appendChild(sceneHeader);
-        filmBody.appendChild(sceneBody);
+        sceneSection.appendChild(sceneHeader);
+        sceneSection.appendChild(sceneBody);
+        filmBody.appendChild(sceneSection);
       }
 
       filmSection.appendChild(filmHeader);

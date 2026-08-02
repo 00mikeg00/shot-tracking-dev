@@ -5,6 +5,8 @@ let currentSemesterId = null;
 
 let currentClassForNewAssignment = "";
 let rigSelectContext = { className: '', assignmentName: '' };
+let rigModalWorkingRigs = []; // rig paths for the open rig modal; duplicates allowed (same rig referenced multiple times)
+let collapsedClasses = new Set(); // class names the user has collapsed; survives renderClasses() rebuilds
 // ─────────────────────────────────────────────────────────────────────────────
 // INIT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -58,7 +60,7 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         console.log("📦 Fetching rigs...");
-        fetch('/api/rigs')
+        fetch('/classes/api/rigs')
           .then(res => res.json())
           .then(rigs => {
             rigList = rigs;
@@ -136,24 +138,39 @@ document.addEventListener("DOMContentLoaded", () => {
 
   window.openRigModal = function (className, assignmentName) {
     rigSelectContext = { className, assignmentName };
+    // Copy so edits while the modal is open (including across search filters) aren't lost.
+    rigModalWorkingRigs = [...(assignmentsData[className][assignmentName].rigs || [])];
 
-    const selectedRigs = assignmentsData[className][assignmentName].rigs || [];
     const container = document.getElementById('rig-options-container');
     const searchInput = document.getElementById('rig-search-input');
+
+    function countOf(rig) {
+      return rigModalWorkingRigs.filter(r => r === rig).length;
+    }
 
     function renderFilteredRigs(filterText = "") {
       const filtered = rigList.filter(rig => rig.toLowerCase().includes(filterText.toLowerCase()));
 
       container.innerHTML = filtered.map(rig => {
         const file = rig.split(/[\\/]/).pop();
-        const checked = selectedRigs.includes(rig) ? 'checked' : '';
         return `
           <label class="flex items-center space-x-3 p-3 border rounded bg-gray-50 text-base w-full" title="${file}">
-            <input type="checkbox" value="${rig}" ${checked} class="w-5 h-5" />
+            <input type="number" min="0" value="${countOf(rig)}" data-rig="${rig}"
+                   class="rig-count-input w-16 border rounded px-2 py-1 text-black" />
             <span class="truncate w-full">${file}</span>
           </label>
         `;
       }).join('');
+
+      container.querySelectorAll('.rig-count-input').forEach(input => {
+        input.addEventListener('change', () => {
+          const rig = input.dataset.rig;
+          const count = Math.max(0, parseInt(input.value, 10) || 0);
+          input.value = count;
+          rigModalWorkingRigs = rigModalWorkingRigs.filter(r => r !== rig);
+          for (let i = 0; i < count; i++) rigModalWorkingRigs.push(rig);
+        });
+      });
     }
 
     // Initial render
@@ -228,6 +245,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
       assignmentsData[className][assignmentName].camera = checked;
     }
+
+    if (e.target.classList.contains("frame-start") || e.target.classList.contains("frame-end")) {
+      const className = e.target.dataset.class;
+      const assignmentName = e.target.dataset.assignment;
+      const field = e.target.classList.contains("frame-start") ? "frame_start" : "frame_end";
+      const value = e.target.value === "" ? null : parseInt(e.target.value, 10);
+
+      if (!assignmentsData[className]) return;
+      if (!assignmentsData[className][assignmentName]) return;
+
+      assignmentsData[className][assignmentName][field] = Number.isNaN(value) ? null : value;
+    }
   });
 
   // Filter table rows based on search input
@@ -244,7 +273,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async function loadOldConfig() {
-    const res = await fetch("/api/assignment-config/files");
+    const res = await fetch("/classes/assignment-config/files");
     const data = await res.json();
     const files = data.files || [];
 
@@ -326,7 +355,9 @@ document.addEventListener("DOMContentLoaded", () => {
             next[className][assignmentName] = {
               filename: cfg.filename || "",
               camera: !!cfg.camera,
-              rigs
+              rigs,
+              frame_start: cfg.frame_start ?? null,
+              frame_end: cfg.frame_end ?? null
             };
           }
         }
@@ -411,14 +442,16 @@ document.addEventListener("DOMContentLoaded", () => {
         entries[className][assignmentName] = {
           filename: config.filename || "",
           camera: !!config.camera,
-          rigs: (config.rigs || []).map(r => ({ path: r }))
+          rigs: (config.rigs || []).map(r => ({ path: r })),
+          frame_start: config.frame_start ?? null,
+          frame_end: config.frame_end ?? null
         };
       }
     }
 
     console.log("💾 Saving semester config:", semesterId, semesterName);
 
-    const result = await fetch(`/api/assignment-config/save-semester/${semesterId}`, {
+    const result = await fetch(`/classes/assignment-config/save-semester/${semesterId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ classes: entries })
@@ -446,12 +479,14 @@ document.addEventListener("DOMContentLoaded", () => {
         entries[className][assignmentName] = {
           filename: config.filename || '',
           camera: !!config.camera,
-          rigs: (config.rigs || []).map(r => ({ path: r }))
+          rigs: (config.rigs || []).map(r => ({ path: r })),
+          frame_start: config.frame_start ?? null,
+          frame_end: config.frame_end ?? null
         };
       }
     }
 
-    const result = await fetch(`/api/assignment-config/save-semester/${semesterId}`, {
+    const result = await fetch(`/classes/api/assignment-config/save-draft`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ semester: { name: semesterName, ...entries } })
@@ -491,7 +526,9 @@ document.addEventListener("DOMContentLoaded", () => {
             assignmentsData[className][name] = {
               filename: name,
               camera: false,
-              rigs: []
+              rigs: [],
+              frame_start: null,
+              frame_end: null
             };
           });
           closeNewClassModal();
@@ -525,7 +562,9 @@ document.addEventListener("DOMContentLoaded", () => {
     assignmentsData[currentClassForNewAssignment][aName] = {
       filename: aName,
       camera: false,
-      rigs: []
+      rigs: [],
+      frame_start: null,
+      frame_end: null
     };
 
     closeNewAssignmentModal();
@@ -533,8 +572,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   window.confirmRigSelection = function () {
-    const selected = Array.from(document.querySelectorAll('#rig-options-container input:checked'))
-      .map(input => input.value);
+    const selected = [...rigModalWorkingRigs];
 
     const { className, assignmentName } = rigSelectContext;
     assignmentsData[className][assignmentName].rigs = selected;
@@ -560,7 +598,7 @@ document.addEventListener("DOMContentLoaded", () => {
       .map(([className, assignments]) => {
         const assignmentsHTML = Object.entries(assignments)
           .map(([aName, cfg]) => `
-        <div class="mb-3 assignment-block border rounded p-2 bg-gray-50 text-white" data-assignment="${aName}" draggable="true">
+        <div class="mb-3 assignment-block border rounded p-2 bg-gray-50 text-black" data-assignment="${aName}" draggable="true">
           <div class="flex justify-between items-center">
               <strong>${aName}</strong>
               <div class="flex gap-2 items-center">
@@ -573,6 +611,10 @@ document.addEventListener("DOMContentLoaded", () => {
               <label>Filename:</label>
               <input value="${cfg.filename || ''}" class="filename border px-2 py-1 rounded text-black bg-white" data-class="${className}" data-assignment="${aName}">
               <label><input type="checkbox" class="camera-toggle" ${cfg.camera ? 'checked' : ''} data-class="${className}" data-assignment="${aName}"> Camera</label>
+              <label>Frame Start:</label>
+              <input type="number" value="${cfg.frame_start ?? ''}" class="frame-start border px-2 py-1 rounded text-black bg-white w-20" data-class="${className}" data-assignment="${aName}">
+              <label>Frame End:</label>
+              <input type="number" value="${cfg.frame_end ?? ''}" class="frame-end border px-2 py-1 rounded text-black bg-white w-20" data-class="${className}" data-assignment="${aName}">
             </div>
             <label class="font-medium">Rigs:</label>
               <button class="select-rigs-btn text-sm text-black bg-gray-200 px-3 py-1 rounded"
@@ -580,26 +622,35 @@ document.addEventListener("DOMContentLoaded", () => {
                 Select Rigs
               </button>
               <div class="rig-list-summary text-xs text-blue-400 mt-1">
-                ${(cfg.rigs || [])
-              .map(r => {
-                // normalize to string
-                let rigPath = "";
-                if (typeof r === "string") {
-                  rigPath = r;
-                } else if (r && typeof r.path === "string") {
-                  rigPath = r.path;
-                } else if (Array.isArray(r)) {
-                  rigPath = r[0] || "";  // handles nested array edge cases
-                } else if (typeof r === "object" && Object.keys(r).length) {
-                  rigPath = Object.values(r)[0]; // last resort fallback
-                }
+                ${(() => {
+                  const names = (cfg.rigs || []).map(r => {
+                    // normalize to string
+                    let rigPath = "";
+                    if (typeof r === "string") {
+                      rigPath = r;
+                    } else if (r && typeof r.path === "string") {
+                      rigPath = r.path;
+                    } else if (Array.isArray(r)) {
+                      rigPath = r[0] || "";  // handles nested array edge cases
+                    } else if (typeof r === "object" && Object.keys(r).length) {
+                      rigPath = Object.values(r)[0]; // last resort fallback
+                    }
 
-                // only split if it's really a string
-                return typeof rigPath === "string" && rigPath.match(/[\\/]/)
-                  ? rigPath.split(/[\\/]/).pop()
-                  : "(Unknown)";
-              })
-              .join(", ") || "None selected"}
+                    // only split if it's really a string
+                    return typeof rigPath === "string" && rigPath.match(/[\\/]/)
+                      ? rigPath.split(/[\\/]/).pop()
+                      : "(Unknown)";
+                  });
+
+                  if (names.length === 0) return "None selected";
+
+                  // Same rig can be referenced multiple times (e.g. 3 balls in one scene) — show as "x3".
+                  const counts = {};
+                  names.forEach(n => { counts[n] = (counts[n] || 0) + 1; });
+                  return Object.entries(counts)
+                    .map(([n, c]) => c > 1 ? `${n} ×${c}` : n)
+                    .join(", ");
+                })()}
               </div>
           </div>
         </div>`).join('');
@@ -624,6 +675,17 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>`;
       })
       .join('');
+
+    // Reapply any collapsed state that survived this rebuild
+    container.querySelectorAll(".class-block").forEach(block => {
+      const className = block.dataset.class;
+      if (!collapsedClasses.has(className)) return;
+      const header = block.firstElementChild;
+      const content = header?.nextElementSibling;
+      const icon = header?.querySelector("span");
+      if (content) content.style.display = "none";
+      if (icon) icon.textContent = "+";
+    });
 
     enableDragSort();
 
@@ -654,10 +716,16 @@ document.addEventListener("DOMContentLoaded", () => {
   window.toggleConfigClass = function (headerEl) {
     const content = headerEl.nextElementSibling;
     const icon = headerEl.querySelector("span");
+    const className = headerEl.closest(".class-block")?.dataset.class;
 
     const isHidden = content.style.display === "none";
     content.style.display = isHidden ? "block" : "none";
     icon.textContent = isHidden ? "−" : "+";
+
+    if (className) {
+      if (isHidden) collapsedClasses.delete(className);
+      else collapsedClasses.add(className);
+    }
   };
   
 

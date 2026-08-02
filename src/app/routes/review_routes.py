@@ -364,6 +364,98 @@ def get_review_files():
                     "individual_assignment_id": assignment_id
                 })
 
+    # 🖊️ Planning drawings — DB-backed (not filename-scanned), merged into
+    # the same all_assignments shape the Sidebar already renders. Unlike
+    # the video scan above there can be several current files per
+    # individual_assignment_id, so page_order (not a filename regex) is
+    # what keeps them in the right sequence.
+    planning_rows = cursor.execute("""
+        SELECT pf.id, pf.file_path, pf.file_name, pf.page_order,
+               pf.individual_assignment_id,
+               a.id AS assignment_id,
+               c.id AS class_id, c.class_name,
+               s.year, s.term
+        FROM planning_files pf
+        JOIN individual_assignments ia ON pf.individual_assignment_id = ia.id
+        JOIN assignments a ON ia.assignment_id = a.id
+        JOIN classes c ON a.class_id = c.id
+        JOIN semesters s ON c.semester_id = s.id
+        ORDER BY pf.individual_assignment_id, pf.page_order
+    """).fetchall()
+
+    for row in planning_rows:
+        # Same _R convention videos use: unreviewed drawings still end in
+        # their plain filename, reviewed ones got renamed by save_annotations.
+        is_reviewed = bool(re.search(r"_R\.(png|jpe?g)$", row["file_name"], re.IGNORECASE))
+
+        key = f"{row['year']}-{row['term']} - {row['class_name']}"
+        all_assignments.setdefault(key, [])
+        all_assignments[key].append({
+            "file_name": row["file_name"],
+            "file_path": row["file_path"],
+            "scene_id": None,
+            "individual_assignment_id": row["individual_assignment_id"],
+            "is_planning_drawing": True,
+            "page_order": row["page_order"],
+        })
+
+        # Unreviewed drawings also belong in the "Assignments to Review"
+        # queue, same as an unreviewed video would -- once save_annotations
+        # renames it to _R, it drops out of this list on its own.
+        if not is_reviewed:
+            assignments.append({
+                "class_id": row["class_id"],
+                "class_name": row["class_name"],
+                "assignment_id": row["assignment_id"],
+                "individual_assignment_id": row["individual_assignment_id"],
+                "file_name": row["file_name"],
+                "file_path": row["file_path"],
+                "is_reviewed": False,
+                "is_planning_drawing": True,
+                "page_order": row["page_order"],
+            })
+
+    # 🎥 Video references — also DB-backed, same merge point as planning
+    # drawings. Unlike drawings these are reference material the instructor
+    # views (not annotated/reviewed per-file), so unlike the block above
+    # there's no _R lifecycle and nothing gets added to the to-review queue
+    # -- they always live in all_assignments only, feeding into the single
+    # Planning-step grade alongside everything else.
+    video_ref_rows = cursor.execute("""
+        SELECT vr.id, vr.file_path, vr.file_name, vr.source_type, vr.external_url,
+               vr.individual_assignment_id,
+               a.name AS assignment_name, u.name AS uploader_name,
+               c.class_name, s.year, s.term
+        FROM video_reference_files vr
+        JOIN individual_assignments ia ON vr.individual_assignment_id = ia.id
+        JOIN assignments a ON ia.assignment_id = a.id
+        JOIN classes c ON a.class_id = c.id
+        JOIN semesters s ON c.semester_id = s.id
+        JOIN users u ON vr.uploaded_by_user_id = u.id
+        ORDER BY vr.individual_assignment_id, vr.uploaded_at
+    """).fetchall()
+
+    for row in video_ref_rows:
+        key = f"{row['year']}-{row['term']} - {row['class_name']}"
+        all_assignments.setdefault(key, [])
+        if row["source_type"] == "upload":
+            display_name = row["file_name"]
+        else:
+            # SideBar groups files by parsing "{assignment}_..." out of
+            # file_name -- a raw URL won't parse that way, so link entries
+            # get a synthetic name that follows the same convention.
+            # external_url (below) is what's actually opened on click.
+            display_name = f"{row['assignment_name']}_{row['uploader_name']}_PL_VideoRef_Link.url"
+        all_assignments[key].append({
+            "file_name": display_name,
+            "file_path": row["file_path"],
+            "scene_id": None,
+            "individual_assignment_id": row["individual_assignment_id"],
+            "is_video_reference": True,
+            "source_type": row["source_type"],
+            "external_url": row["external_url"],
+        })
+
     reviewed = films_raw.get("reviewed", {})
     to_review = films_raw.get("to_review", {})
 
@@ -1660,6 +1752,33 @@ def save_annotations():
             except Exception as e:
                 print(f"[WARN] Rename failed: {e} — proceeding to save JSON anyway")
 
+        # 🖊️ Planning drawings are DB-backed (planning_files.file_path), not
+        # filename-scanned like videos -- the rename above just orphaned that
+        # row unless we repoint it at the new _R path too. Only do this if
+        # the rename actually landed (it can silently fail on Windows with
+        # WinError 32 if something still has the file open) -- otherwise
+        # we'd point the DB row at a file that was never created, which is
+        # worse than leaving it alone (videos self-heal via re-scan; this
+        # table doesn't).
+        try:
+            normalized_original = original_path.replace("\\", "/")
+            normalized_reviewed = reviewed_path.replace("\\", "/")
+            rename_actually_happened = (
+                normalized_original != normalized_reviewed
+                and os.path.exists(reviewed_path)
+                and not os.path.exists(original_path)
+            )
+            if rename_actually_happened:
+                db_conn = get_db()
+                db_conn.execute("""
+                    UPDATE planning_files
+                    SET file_path = ?, file_name = ?
+                    WHERE file_path = ?
+                """, (normalized_reviewed, os.path.basename(reviewed_path), normalized_original))
+                db_conn.commit()
+        except Exception as e:
+            print(f"[WARN] planning_files path sync skipped: {e}")
+
         # ✅ Always write JSON (even empty) beside reviewed file
         try:
             with open(reviewed_json_path, "w", encoding="utf-8") as f:
@@ -2210,6 +2329,20 @@ def delete_file():
         json_path = os.path.splitext(file_path)[0] + ".json"
         if os.path.exists(json_path):
             os.remove(json_path)
+
+        # Planning drawings are DB-backed (planning_files.file_path) --
+        # deleting only the disk file here (this route's original behavior,
+        # built for filename-scanned videos with no DB row) would leave a
+        # dangling row pointing at a file that no longer exists.
+        try:
+            normalized_path = file_path.replace("\\", "/")
+            db_conn = get_db()
+            db_conn.execute("DELETE FROM planning_files WHERE file_path = ?", (normalized_path,))
+            db_conn.execute("DELETE FROM video_reference_files WHERE file_path = ?", (normalized_path,))
+            db_conn.commit()
+        except Exception as e:
+            print(f"[WARN] planning_files/video_reference_files cleanup skipped: {e}")
+
         response = jsonify({"success": True, "message": "File deleted."})
         return response
     except Exception as e:

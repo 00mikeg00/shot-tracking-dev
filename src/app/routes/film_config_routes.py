@@ -223,6 +223,40 @@ def add_shot(scene_id):
         """, (scene_id, shot_number, description, start_date, due_date))
         conn.commit()
 
+        shot_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+        # Seed shot_step_assignments with each step's top node so this shot
+        # never falls back to a mismatched default status in the dashboard.
+        scene = conn.execute("SELECT film_id FROM scenes WHERE id = ?", (scene_id,)).fetchone()
+        film = conn.execute("SELECT step_id FROM films WHERE id = ?", (scene["film_id"],)).fetchone() if scene else None
+
+        if film and film["step_id"]:
+            excluded_step_ids = [row["step_id"] for row in conn.execute("""
+                SELECT step_id FROM film_step_progress WHERE film_id = ?
+            """, (scene["film_id"],)).fetchall()]
+
+            steps = conn.execute("""
+                SELECT st.id FROM steps st
+                WHERE st.parent_id = ?
+                AND st.id NOT IN ({})
+                ORDER BY st.order_num ASC
+            """.format(",".join("?" * len(excluded_step_ids))), [film["step_id"]] + excluded_step_ids).fetchall()
+
+            for step in steps:
+                top_node = conn.execute("""
+                    SELECT name FROM nodes
+                    WHERE step_id = ?
+                    ORDER BY CAST(SUBSTR(position, INSTR(position, ' ') + 1) AS FLOAT) ASC
+                    LIMIT 1
+                """, (step["id"],)).fetchone()
+
+                conn.execute("""
+                    INSERT INTO shot_step_assignments (shot_id, step_id, status, due_date)
+                    VALUES (?, ?, ?, ?)
+                """, (shot_id, step["id"], top_node["name"] if top_node else "Not Started", due_date or None))
+
+            conn.commit()
+
         return jsonify({"success": True, "message": "Shot added successfully."})
 
     except Exception as e:

@@ -149,7 +149,14 @@ export default function SideBar({
             (
                 file.file_name.endsWith(".webm") ||
                 file.file_name.endsWith(".mov") ||
-                file.file_name.endsWith(".mp4")
+                file.file_name.endsWith(".mp4") ||
+                // Planning drawings (still images) — additive to the video
+                // extensions above, not a replacement.
+                file.is_planning_drawing ||
+                /\.(png|jpe?g)$/i.test(file.file_name) ||
+                // Video references — uploads are already .webm (covered
+                // above); links use a synthetic .url name.
+                file.is_video_reference
             )
         );
     };
@@ -397,6 +404,13 @@ export default function SideBar({
                                                                                     key={idx}
                                                                                     className="cursor-pointer hover:bg-gray-700 px-2 py-1 rounded-md text-sm"
                                                                                     onClick={() => {
+                                                                                        // Link-type video references aren't a servable
+                                                                                        // local file -- there's nothing for the player
+                                                                                        // to load, just open it where it lives.
+                                                                                        if (file.is_video_reference && file.source_type === "link") {
+                                                                                            window.open(file.external_url, "_blank", "noopener,noreferrer");
+                                                                                            return;
+                                                                                        }
                                                                                         setSelectedAssignment?.(file);
                                                                                         handleFileClick(file, "assignments");
                                                                                     }}
@@ -447,7 +461,9 @@ export default function SideBar({
                                                                                         });
                                                                                     }}
                                                                                 >
-                                                                                    📄 {file.file_name}
+                                                                                    {file.is_video_reference
+                                                                                        ? (file.source_type === "link" ? "🔗 Video reference (link)" : "🎥 " + file.file_name)
+                                                                                        : <>📄 {file.file_name}</>}
                                                                                 </li>
                                                                             ))}
                                                                         </ul>

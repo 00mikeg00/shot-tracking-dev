@@ -94,7 +94,7 @@ def get_assignment_config_by_semester(semester_id):
 
         assignments = cursor.execute("SELECT name FROM assignments WHERE class_id = ? ORDER BY name", (class_id,)).fetchall()
         presets = cursor.execute("""
-            SELECT assignment_name, rigs, camera, filename
+            SELECT assignment_name, rigs, camera, filename, frame_start, frame_end
             FROM assignment_config_presets
             WHERE class_id = ?
         """, (class_id,)).fetchall()
@@ -102,13 +102,15 @@ def get_assignment_config_by_semester(semester_id):
             p['assignment_name']: {
                 'rigs': json.loads(p['rigs']) if p['rigs'] else [],
                 'camera': bool(p['camera']),
-                'filename': p['filename'] or ""
+                'filename': p['filename'] or "",
+                'frame_start': p['frame_start'],
+                'frame_end': p['frame_end']
             } for p in presets
         }
 
         for assignment in assignments:
             a_name = assignment['name']
-            preset = preset_map.get(a_name, {"rigs": [], "camera": False, "filename": ""})
+            preset = preset_map.get(a_name, {"rigs": [], "camera": False, "filename": "", "frame_start": None, "frame_end": None})
             result['classes'][class_name][a_name] = preset
 
     return jsonify(result)
@@ -215,6 +217,10 @@ def save_assignment_config_semester(semester_id):
             raw_rigs = cfg.get("rigs", [])
             camera = bool(cfg.get("camera", False))
             filename = cfg.get("filename", "")
+            frame_start = cfg.get("frame_start")
+            frame_end = cfg.get("frame_end")
+            frame_start = int(frame_start) if frame_start not in (None, "") else None
+            frame_end = int(frame_end) if frame_end not in (None, "") else None
 
             # ✅ Normalize rigs — always list of { "path": "..." }
             rigs = []
@@ -232,15 +238,17 @@ def save_assignment_config_semester(semester_id):
             json_obj["semester"][class_name][assignment_name] = {
                 "rigs": rigs,
                 "camera": camera,
-                "filename": filename
+                "filename": filename,
+                "frame_start": frame_start,
+                "frame_end": frame_end
             }
 
 
             if class_id:
                 cursor.execute("""
-                    INSERT INTO assignment_config_presets (class_id, assignment_name, rigs, camera, filename)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (class_id, assignment_name, json.dumps(rigs), camera, filename))
+                    INSERT INTO assignment_config_presets (class_id, assignment_name, rigs, camera, filename, frame_start, frame_end)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (class_id, assignment_name, json.dumps(rigs), camera, filename, frame_start, frame_end))
 
     conn.commit()
 
@@ -270,7 +278,7 @@ def list_assignment_config_files():
             if file.lower().endswith(".json"):
                 files.append({
                     "name": file,
-                    "path": f"/api/assignment-config/load?path={file}"
+                    "path": f"/classes/assignment-config/load?path={file}"
                 })
     else:
         print("⚠️  Config folder not found or not accessible.")

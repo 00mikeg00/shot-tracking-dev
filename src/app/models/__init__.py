@@ -50,6 +50,7 @@ def query_users(filters=None, limit=None, offset=None):
     FROM users
     LEFT JOIN user_groups ON users.id = user_groups.user_id
     LEFT JOIN groups ON user_groups.group_id = groups.id
+    WHERE users.archived = 0
     """
     params = []
 
@@ -62,8 +63,7 @@ def query_users(filters=None, limit=None, offset=None):
             filter_clauses.append("users.id = ?")
             params.append(filters['id'])
         if filter_clauses:
-            query += " WHERE " + " AND ".join(filter_clauses)
-
+            query += " AND " + " AND ".join(filter_clauses)
 
     query += """
     GROUP BY users.id
@@ -912,10 +912,30 @@ def get_all_steps():
 def get_unarchived_classes():
     """Fetch all unarchived classes."""
     query = """
-        SELECT id, class_name, year, semester, archived
-        FROM classes
-        WHERE archived = 0
-        ORDER BY year DESC, semester DESC
+        SELECT c.id, c.class_name, s.year, s.term AS semester, c.archived
+        FROM classes c
+        LEFT JOIN semesters s ON c.semester_id = s.id
+        WHERE c.archived = 0
+        ORDER BY s.year DESC,
+            CASE s.term
+                WHEN 'Spring' THEN 1
+                WHEN 'Summer' THEN 2
+                WHEN 'Fall' THEN 3
+            END
+    """
+    conn = get_db()
+    return [dict(row) for row in conn.execute(query)]
+
+def get_archived_classes():
+    """Fetch all archived classes, with semester label resolved."""
+    query = """
+        SELECT
+            c.id, c.class_name, c.code, c.class_number, c.archived,
+            s.year, s.term, s.year || '-' || s.term AS semester_label
+        FROM classes c
+        LEFT JOIN semesters s ON s.id = c.semester_id
+        WHERE c.archived = 1
+        ORDER BY s.year DESC, s.term DESC
     """
     conn = get_db()
     return [dict(row) for row in conn.execute(query)]
@@ -931,13 +951,48 @@ def get_unarchived_users():
     conn = get_db()
     return [dict(row) for row in conn.execute(query)]
 
-def get_unarchived_films():
-    """Fetch all films that are not archived."""
+def get_archived_users():
+    """Fetch all archived users."""
     query = """
-        SELECT id, title, release_date, director
-        FROM films
-        WHERE archived = 0
-        ORDER BY release_date DESC
+        SELECT id, name, email, created_at
+        FROM users
+        WHERE archived = 1
+        ORDER BY name
+    """
+    conn = get_db()
+    return [dict(row) for row in conn.execute(query)]
+
+def get_unarchived_films():
+    """Fetch all films that are not archived, with director name and semester label resolved."""
+    query = """
+        SELECT
+            f.id,
+            f.name,
+            f.description,
+            f.created_at,
+            u.name AS director_name,
+            s.year || '-' || s.term AS semester_label
+        FROM films f
+        LEFT JOIN users u ON u.id = f.director_id
+        LEFT JOIN semesters s ON s.id = f.semester_id
+        WHERE f.archived = 0
+        ORDER BY f.created_at DESC
+    """
+    conn = get_db()
+    return [dict(row) for row in conn.execute(query)]
+
+def get_archived_films():
+    """Fetch all archived films, with director name and semester label resolved."""
+    query = """
+        SELECT
+            f.id, f.name, f.description, f.created_at,
+            u.name AS director_name,
+            s.year || '-' || s.term AS semester_label
+        FROM films f
+        LEFT JOIN users u ON u.id = f.director_id
+        LEFT JOIN semesters s ON s.id = f.semester_id
+        WHERE f.archived = 1
+        ORDER BY f.created_at DESC
     """
     conn = get_db()
     return [dict(row) for row in conn.execute(query)]

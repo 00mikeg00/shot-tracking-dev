@@ -27,6 +27,13 @@
                         class="w-full border-2 border-gray-300 rounded-lg p-2 focus:ring focus:ring-blue-300 text-black"
                         placeholder="Enter email" value="{{ user['email'] }}" required>          </div>
             </div>
+            <!-- Graduation Year -->
+            <div>
+                <label for="graduation_year" class="block text-white font-medium">Graduation Year</label>
+                <input type="number" id="graduation_year" name="graduation_year" min="2020" max="2035"
+                    class="w-full border-2 border-gray-300 rounded-lg p-2 focus:ring focus:ring-blue-300 text-black"
+                    value="{{ user['graduation_year'] or '' }}">
+            </div>
 
             <!-- Class Roles -->
             <label class="block text-white font-medium">Class Roles</label>

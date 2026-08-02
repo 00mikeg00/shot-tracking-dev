@@ -303,13 +303,19 @@ export default function VideoPlayer({
                 style={{ maxHeight: "calc(100vh - 220px)" }}>
                 <div className="relative w-full h-full mx-auto border-2 border-gray-500 bg-black">
                     {selectedFile ? (
-                        selectedFile.endsWith(".png") ? (
+                        /\.(png|jpe?g)$/i.test(selectedFile) ? (
                             <>
                                 <img
                                     ref={videoRef} // ✅ same ref as video for drawing
                                     src={selectedFile}
                                     className="w-full h-auto max-h-[calc(100vh-260px)] object-contain"
-                                    alt="Uploaded PNG"
+                                    alt="Uploaded image"
+                                    // Video's canvas-resize listener fires off "resize"/"layoutchange"
+                                    // (see SideBar.jsx's collapse toggle for the same pattern) --
+                                    // images have no equivalent to <video>'s loadedmetadata, so without
+                                    // this the drawing canvas stays at its default 300x150 size until
+                                    // something else happens to trigger a resize.
+                                    onLoad={() => window.dispatchEvent(new Event("resize"))}
                                 />
                                 {videoRef.current && (
                                     <DrawingCanvas
@@ -392,7 +398,7 @@ export default function VideoPlayer({
                 </div>
             )}
             {/* Video Controls */}
-            {selectedFile && !selectedFile.endsWith(".png") && (
+            {selectedFile && !/\.(png|jpe?g)$/i.test(selectedFile) && (
                 <div className="mt-1 flex items-center justify-center space-x-4 bg-gray-800 text-white p-2 rounded-lg">
                     {/* Play Button (Fixed Width) */}
                     <button

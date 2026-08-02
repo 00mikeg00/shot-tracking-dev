@@ -83,6 +83,7 @@ def get_all_classes_minimal(conn):
         FROM classes c
         LEFT JOIN users u ON c.instructor_id = u.id
         LEFT JOIN semesters s ON c.semester_id = s.id
+        WHERE c.archived = 0
         ORDER BY s.year DESC,
                 CASE s.term
                     WHEN 'Spring' THEN 1
@@ -96,6 +97,17 @@ def get_all_classes_minimal(conn):
     except Exception as e:
         print(f"Error fetching class data: {e}")
         return []
+
+def serialize_classes_for_dropdown():
+    conn = get_db()
+    return [
+        {
+            "id": cls['id'],
+            "name": cls['full_class_name'],
+            "url": url_for('assignments.view_assignments', class_id=cls['id'])
+        }
+        for cls in get_all_classes_minimal(conn)
+    ]
 
 def get_class_by_id(class_id):
     query = "SELECT * FROM classes WHERE id = ?"
@@ -115,6 +127,7 @@ def get_all_classes_dict():
         FROM classes c
         JOIN semesters s ON c.semester_id = s.id
         LEFT JOIN users u ON c.instructor_id = u.id
+        WHERE c.archived = 0
         ORDER BY s.year DESC,
                  CASE s.term
                     WHEN 'Spring' THEN 1
@@ -145,15 +158,6 @@ def fetch_unique_class_names():
     rows = db.execute("SELECT DISTINCT class_name FROM classes ORDER BY class_name").fetchall()
     return [row["class_name"] for row in rows]
 
-def serialize_classes_for_dropdown():
-    return [
-        {
-            "id": cls['id'],
-            "name": cls['full_class_name'],
-            "url": url_for('assignments.view_assignments', class_id=cls['id'])
-        }
-        for cls in get_all_classes_minimal()
-    ]
 
 def get_class_folder_path(semester_label: str, class_name: str) -> str:
     return os.path.join(BASE_CLASS_FOLDER, semester_label, class_name)

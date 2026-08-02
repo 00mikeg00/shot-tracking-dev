@@ -1,12 +1,13 @@
 # launcher.py
 # UC GAA Shot Tracker — Maya Launcher Bridge
-# Receives shottracker:// URI from Windows registry and opens Maya
-# with the correct student file for the given assignment.
+# Receives shottracker:// URI from Windows registry and opens Maya.
+# Writes session context for the GAA shelf to read.
 #
-# URI format: shottracker://open?assignment_id=84&class_id=12&username=caratinl
+# URI format: shottracker://open?class_id=13&login_name=bariann&assignment_id=84
 
 import sys
 import os
+import re
 import json
 import datetime
 import subprocess
@@ -14,10 +15,13 @@ import urllib.parse
 import requests
 
 # ── Config ────────────────────────────────────────────────────
-SHOT_TRACKER_URL = "http://10.23.20.210:8000"
-MAYA_EXE         = r"C:\Program Files\Autodesk\Maya2026\bin\maya.exe"
-LOG_PATH         = r"C:\Cincy\logs\launcher_log.txt"
-MAYA_SCRIPT_PATH = r"C:\Cincy\scripts"
+# Override locally with a SHOT_TRACKER_URL environment variable pointed at your
+# dev server — the committed default must stay the intranet address since this
+# file is copied verbatim to lab machines by the installer.
+SHOT_TRACKER_URL  = os.environ.get("SHOT_TRACKER_URL", "http://10.23.20.210:8000")
+MAYA_EXE          = r"C:\Program Files\Autodesk\Maya2026\bin\maya.exe"
+LOG_PATH          = r"C:\Cincy\logs\launcher_log.txt"
+SESSIONS_PATH     = r"C:\Cincy\sessions"
 
 # ── Logging ───────────────────────────────────────────────────
 def log(message):
@@ -30,11 +34,10 @@ def log(message):
 # ── URI Parsing ───────────────────────────────────────────────
 def parse_uri(uri):
     """
-    Parse shottracker://open?assignment_id=84&class_id=12&username=caratinl
+    Parse shottracker://open?class_id=13&login_name=bariann&assignment_id=84
     Returns dict of params or None on failure.
     """
     try:
-        # Strip the scheme
         uri = uri.replace("shottracker://", "http://localhost/")
         parsed = urllib.parse.urlparse(uri)
         params = urllib.parse.parse_qs(parsed.query)
@@ -44,135 +47,83 @@ def parse_uri(uri):
         return None
 
 # ── Shot Tracker API ──────────────────────────────────────────
-def get_assignment_config(assignment_id, username):
+def get_class_context(class_id, login_name):
     """
-    Calls Shot Tracker API and returns assignment config dict.
+    Calls Shot Tracker API and returns full class context dict
+    containing user info and all assignments with rig configs.
     """
     try:
-        url = f"{SHOT_TRACKER_URL}/classes/api/launcher/assignment-config"
+        url = f"{SHOT_TRACKER_URL}/classes/api/launcher/class-context"
         r = requests.get(url, params={
-            "assignment_id": assignment_id,
-            "username": username
+            "class_id":   class_id,
+            "login_name": login_name
         }, timeout=10)
         r.raise_for_status()
         return r.json()
     except Exception as e:
-        log(f"ERROR fetching assignment config: {e}")
+        log(f"ERROR fetching class context: {e}")
         return None
 
-# ── File Resolution ───────────────────────────────────────────
-def resolve_student_file(config):
+# ── Session File ──────────────────────────────────────────────
+def write_session_context(context):
+    r"""
+    Writes the class context JSON to C:\Cincy\sessions\{login_name}_context.json
+    Keyed by login_name so two students sharing a machine never collide.
     """
-    Checks if a student file exists for this assignment.
-    Returns the file path if found, None if this is a new file.
-    
-    Naming convention: AssignmentName_username_BL_V001.ma
-    Looks for highest version of current step.
-    """
-    save_path = config["save_path"]
-    assignment_name = config["assignment_name"].replace(" ", "")
-    username = config["username"]
+    login_name    = context["user"]["login_name"]
+    session_file  = os.path.join(SESSIONS_PATH, f"{login_name}_context.json")
 
-    if not os.path.isdir(save_path):
-        log(f"Save path doesn't exist yet: {save_path}")
-        return None
+    os.makedirs(SESSIONS_PATH, exist_ok=True)
 
-    # Look for existing files matching this assignment
-    import re
-    pattern = re.compile(
-        rf"^{re.escape(assignment_name)}_{re.escape(username)}_([A-Z]+)_V(\d+)\.ma$",
-        re.IGNORECASE
-    )
+    with open(session_file, "w", encoding="utf-8") as f:
+        json.dump(context, f, indent=2)
 
-    matches = []
-    for f in os.listdir(save_path):
-        m = pattern.match(f)
-        if m:
-            matches.append((f, m.group(1), int(m.group(2))))
-
-    if not matches:
-        log("No existing file found — will create new.")
-        return None
-
-    # Sort by version descending, return latest
-    matches.sort(key=lambda x: x[2], reverse=True)
-    latest = matches[0][0]
-    full_path = os.path.join(save_path, latest)
-    log(f"Found existing file: {full_path}")
-    return full_path
-
-# ── MEL Script Builder ────────────────────────────────────────
-def build_mel_script(config, existing_file):
-    """
-    Builds a MEL script that Maya executes on launch.
-    Handles both new file creation and existing file opening.
-    """
-    save_path    = config["save_path"].replace("\\", "\\\\")
-    assignment   = config["assignment_name"].replace(" ", "")
-    username     = config["username"]
-    frame_start  = config["frame_start"]
-    frame_end    = config["frame_end"]
-    camera       = config["camera"]
-    rigs         = config["rigs"]
-
-    lines = []
-
-    if existing_file:
-        # Open existing file
-        safe_path = existing_file.replace("\\", "\\\\")
-        lines.append(f'file -force -open "{safe_path}";')
-        lines.append(f'print "Opened existing file: {safe_path}\\n";')
-    else:
-        # New file — set up scene from scratch
-        lines.append('file -force -new;')
-
-        # Create save directory if needed
-        lines.append(f'sysFile -makeDir "{save_path}";')
-
-        # Load rigs
-        for rig in rigs:
-            rig_path = rig.get("path", "").replace("\\", "\\\\")
-            if rig_path:
-                lines.append(f'file -import -type "mayaBinary" -mergeNamespacesOnClash true "{rig_path}";')
-                lines.append(f'print "Loaded rig: {rig_path}\\n";')
-
-        # Add camera if needed
-        if camera:
-            lines.append('camera -centerOfInterest 5 -focalLength 35 -name "renderCam";')
-            lines.append('print "Camera added\\n";')
-
-        # Save new file as V001 at BL step
-        new_filename = f"{assignment}_{username}_BL_V001.ma"
-        new_filepath = f"{save_path}\\\\{new_filename}"
-        lines.append(f'file -rename "{new_filepath}";')
-        lines.append(f'file -save -type "mayaAscii";')
-        lines.append(f'print "Saved new file: {new_filepath}\\n";')
-
-    # Set frame range
-    lines.append(f'playbackOptions -min {frame_start} -max {frame_end} -animationStartTime {frame_start} -animationEndTime {frame_end};')
-    lines.append(f'print "Frame range set: {frame_start}-{frame_end}\\n";')
-    lines.append('print "Shot Tracker launch complete\\n";')
-
-    return "\n".join(lines)
+    log(f"Session context written: {session_file}")
+    return session_file
 
 # ── Maya Launch ───────────────────────────────────────────────
-def launch_maya(mel_script):
-    """
-    Writes MEL script to a temp file and launches Maya with it.
-    """
-    mel_path = r"C:\Cincy\logs\launch_script.mel"
-    os.makedirs(os.path.dirname(mel_path), exist_ok=True)
+_SAFE_LOGIN_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 
-    with open(mel_path, "w") as f:
-        f.write(mel_script)
-
-    log(f"MEL script written to: {mel_path}")
+def launch_maya(login_name, individual_assignment_id=None):
+    """
+    Launches Maya and, via the -command startup flag, immediately runs
+    Assignments.py — it opens the student's existing scene if one exists,
+    or creates it from config if this is their first time. No shelf
+    button, no manual step.
+    """
     log(f"Launching Maya: {MAYA_EXE}")
 
-    subprocess.Popen([
-        MAYA_EXE,
-        "-script", mel_path
-    ])
+    if not _SAFE_LOGIN_NAME.match(login_name or ""):
+        log(f"ERROR: login_name '{login_name}' contains unsafe characters; launching Maya clean instead")
+        subprocess.Popen([MAYA_EXE])
+        return
+
+    try:
+        assignment_arg = str(int(individual_assignment_id)) if individual_assignment_id is not None else "None"
+    except (TypeError, ValueError):
+        log(f"WARNING: individual_assignment_id '{individual_assignment_id}' is not a valid integer; ignoring")
+        assignment_arg = "None"
+
+    # Single-quoted Python string literals nested inside a double-quoted MEL
+    # string — login_name is regex-validated above so it can't contain a
+    # quote character and break out of either layer.
+    python_code = (
+        "import sys; "
+        "sys.path.insert(0, 'C:/Cincy/scripts'); "
+        "import Assignments; "
+        f"Assignments.run(login_name='{login_name}', individual_assignment_id={assignment_arg})"
+    )
+    # Deferred rather than run inline — Maya's -command content executes
+    # before the UI (panels, shelves) has finished constructing. Running
+    # Assignments.py that early was already caught causing a "modelPanel4
+    # not found" error from userSetup.mel; it's the same likely cause of
+    # the GAA shelf loading empty/getting blanked on exit. evalDeferred
+    # queues this to run once Maya's idle event loop picks it up, after
+    # the UI is actually built — same idiom userSetup.mel already uses
+    # for plugin autoloading.
+    mel_command = f'evalDeferred("python(\\"{python_code}\\")")'
+
+    subprocess.Popen([MAYA_EXE, "-command", mel_command])
 
 # ── Main ──────────────────────────────────────────────────────
 def main():
@@ -192,32 +143,46 @@ def main():
         log("ERROR: Could not parse URI")
         sys.exit(1)
 
+    class_id      = params.get("class_id")
+    login_name    = params.get("login_name")
     assignment_id = params.get("assignment_id")
-    username      = params.get("username")
 
-    if not assignment_id or not username:
-        log("ERROR: Missing assignment_id or username in URI")
+    if not class_id or not login_name:
+        log("ERROR: Missing class_id or login_name in URI")
         sys.exit(1)
 
-    log(f"assignment_id={assignment_id} username={username}")
+    log(f"class_id={class_id} login_name={login_name} assignment_id={assignment_id}")
 
-    # Get config from Shot Tracker
-    config = get_assignment_config(assignment_id, username)
-    if not config:
-        log("ERROR: Could not get assignment config from Shot Tracker")
+    # Get full class context from Shot Tracker
+    context = get_class_context(class_id, login_name)
+    if not context:
+        log("ERROR: Could not get class context from Shot Tracker")
         sys.exit(1)
 
-    log(f"Config received: {json.dumps(config)}")
+    log(f"Context received for user: {context['user']['display_name']}")
+    log(f"Class: {context['class']['name']}")
+    log(f"Assignments: {len(context['assignments'])}")
 
-    # Check for existing file
-    existing_file = resolve_student_file(config)
+    # Tag which assignment the student actually clicked OPEN on, so the
+    # shelf can jump straight to it instead of showing a picker.
+    if assignment_id:
+        active = next(
+            (a for a in context["assignments"] if str(a["assignment_id"]) == str(assignment_id)),
+            None
+        )
+        if active:
+            context["active_assignment_id"] = active["individual_assignment_id"]
+            log(f"Active assignment resolved: {active['name']} (individual_assignment_id={active['individual_assignment_id']})")
+        else:
+            log(f"WARNING: assignment_id={assignment_id} not found in class context; shelf will fall back to picker")
 
-    # Build MEL script
-    mel_script = build_mel_script(config, existing_file)
-    log(f"MEL script built")
+    # Write session file for the shelf to read
+    session_file = write_session_context(context)
+    log(f"Session ready: {session_file}")
 
-    # Launch Maya
-    launch_maya(mel_script)
+    # Launch Maya — Assignments.py runs automatically via -command,
+    # opening this student's existing scene or creating it from config.
+    launch_maya(context["user"]["login_name"], context.get("active_assignment_id"))
     log("Maya launch initiated")
 
 if __name__ == "__main__":
