@@ -28,6 +28,7 @@ from app.routes.scene_pipeline_routes import scene_pipeline_bp
 from app.routes.bugreport_routes import bugreport_bp
 from app.routes.assignment_config_routes import config_bp
 from app.routes.launcher_routes import launcher_bp
+from app.routes.capstone_routes import capstone_bp
 from app.routes.planning_routes import planning_bp
 from app.routes.video_reference_routes import video_reference_bp
 
@@ -80,6 +81,7 @@ def create_app(config_override=None):
     app.register_blueprint(bugreport_bp)
     app.register_blueprint(config_bp, url_prefix='/classes')
     app.register_blueprint(launcher_bp)
+    app.register_blueprint(capstone_bp)
     app.register_blueprint(planning_bp)
     app.register_blueprint(video_reference_bp)
 

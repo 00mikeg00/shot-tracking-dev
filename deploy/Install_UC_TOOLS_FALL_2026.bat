@@ -212,13 +212,24 @@ REM     account running this installer to have admin rights there.
 REM     Always overwritten (no /XO or timestamp check) -- unlike every
 REM     other step, this one must reflect the server's current state
 REM     every run, not just sync deltas.
-echo [18/19] Deploying assignments_config.json...
+echo [18/20] Deploying assignments_config.json...
 robocopy "\\GAAAP1PRD01W\c$\Cincy\Configs" "C:\Cincy\Configs" assignments_config.json /R:3 /W:5 /LOG+:"%INSTALL_LOG%"
 set RC=%ERRORLEVEL%
 call :CheckRC %RC% "assignments_config.json"
 
-REM -- 19. Add shottracker:// URI scheme to registry ------------
-echo [19/19] Registering shottracker:// URI scheme...
+REM -- 19. Deploy capstone_config_v1.json from the Flask server --
+REM     Same reasoning and same c$ admin-share pull as assignments_config.json
+REM     above -- the real, current file only ever exists at
+REM     C:\Cincy\Configs\capstone_config_v1.json on GAAAP1PRD01W, regenerated
+REM     by Flask's /films/config/api/save-json on every admin save. Always
+REM     overwritten, not synced from %SRC%.
+echo [19/20] Deploying capstone_config_v1.json...
+robocopy "\\GAAAP1PRD01W\c$\Cincy\Configs" "C:\Cincy\Configs" capstone_config_v1.json /R:3 /W:5 /LOG+:"%INSTALL_LOG%"
+set RC=%ERRORLEVEL%
+call :CheckRC %RC% "capstone_config_v1.json"
+
+REM -- 20. Add shottracker:// URI scheme to registry ------------
+echo [20/20] Registering shottracker:// URI scheme...
 reg add "HKLM\SOFTWARE\Classes\shottracker" /ve /d "URL:Shot Tracker Protocol" /f
 reg add "HKLM\SOFTWARE\Classes\shottracker" /v "URL Protocol" /d "" /f
 reg add "HKLM\SOFTWARE\Classes\shottracker\shell\open\command" /ve /d "\"C:\Program Files\Autodesk\Maya2026\bin\mayapy.exe\" \"C:\Cincy\scripts\launcher.py\" \"%%1\"" /f

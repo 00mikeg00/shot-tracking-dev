@@ -1969,6 +1969,49 @@ def view_shots_route(scene_id):
     steps = db.execute("SELECT id, name FROM steps").fetchall()
     steps = [dict(row) for row in steps]
 
+    # Capstone lock state (Phase 5) -- scene_layout_done gates whether
+    # "Open Layout in Maya" can create a shot Layout file at all; each
+    # shot's own lock row per step drives that step's "Approve" button and
+    # gates the next step (Layout locked -> Animation reachable, etc).
+    def _film_step_id(name):
+        row = db.execute(
+            "SELECT id FROM steps WHERE parent_id = ? AND name = ?",
+            (film["step_id"], name)
+        ).fetchone()
+        return row["id"] if row else None
+
+    def _shot_locks_for_step(step_id):
+        if not step_id:
+            return {}
+        return {
+            row["shot_id"]: bool(row["locked"])
+            for row in db.execute("""
+                SELECT entity_id AS shot_id, locked
+                FROM step_locks
+                WHERE entity_type = 'shot_step' AND step_id = ?
+            """, (step_id,)).fetchall()
+        }
+
+    layout_step_id = _film_step_id("Layout")
+    animation_step_id = _film_step_id("Animation")
+    lighting_step_id = _film_step_id("Lighting")
+
+    scene_layout_done = False
+    if layout_step_id:
+        scene_lock = db.execute("""
+            SELECT locked FROM step_locks
+            WHERE entity_type = 'scene_step' AND entity_id = ? AND step_id = ?
+        """, (scene_id, layout_step_id)).fetchone()
+        scene_layout_done = bool(scene_lock["locked"]) if scene_lock else False
+
+    shot_layout_locks = _shot_locks_for_step(layout_step_id)
+    shot_animation_locks = _shot_locks_for_step(animation_step_id)
+    shot_lighting_locks = _shot_locks_for_step(lighting_step_id)
+
+    for shot in shots:
+        shot["layout_locked"] = shot_layout_locks.get(shot["id"], False)
+        shot["animation_locked"] = shot_animation_locks.get(shot["id"], False)
+        shot["lighting_locked"] = shot_lighting_locks.get(shot["id"], False)
 
     # Render the template
     return render_template(
@@ -1980,7 +2023,8 @@ def view_shots_route(scene_id):
         steps=list(steps_map.values()),
         crew=crew,
         visible_step_ids=set(map(int, request.args.getlist("visible_steps"))),
-        active_page="scenes"
+        active_page="scenes",
+        scene_layout_done=scene_layout_done
     )
 
 @films_bp.route("/shots/edit", methods=["POST"])

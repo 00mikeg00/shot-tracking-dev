@@ -448,9 +448,24 @@ def remove_students_from_class_db(class_id, student_ids):
                 )
             """.format(','.join('?' for _ in student_ids)), [*student_ids, class_id])
 
+            # Step 1.5: step_locks has no FK to individual_assignments any
+            # more (entity_id is polymorphic across assignment/shot_step/
+            # scene_step -- see migrate_polymorphic_step_locks.py), so it no
+            # longer cascades on its own and must be cleaned up manually
+            # here too, same as individual_assignment_statuses above.
+            conn.execute("""
+                DELETE FROM step_locks
+                WHERE entity_type = 'assignment' AND entity_id IN (
+                    SELECT id FROM individual_assignments
+                    WHERE users_id IN ({}) AND assignment_id IN (
+                        SELECT id FROM assignments WHERE class_id = ?
+                    )
+                )
+            """.format(','.join('?' for _ in student_ids)), [*student_ids, class_id])
+
             # ðŸ”¹ Step 2: Delete individual assignments
             conn.execute("""
-                DELETE FROM individual_assignments 
+                DELETE FROM individual_assignments
                 WHERE users_id IN ({}) AND assignment_id IN (
                     SELECT id FROM assignments WHERE class_id = ?
                 )

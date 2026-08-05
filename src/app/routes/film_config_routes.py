@@ -595,13 +595,23 @@ def save_final_json():
         os.makedirs(output_dir, exist_ok=True)
 
         output_path = os.path.join(output_dir, "film_config_v1.json")
+        capstone_output_path = os.path.join(output_dir, "capstone_config_v1.json")
 
         with open(output_path, "w") as f:
             json.dump(data, f, indent=2)
 
+        # Same resolved film/scene/shot/asset structure, written a second
+        # time under the name the Phase 5 capstone pipeline (scene/shot
+        # Layout, Animation, Lighting) reads -- one save action, two
+        # deployed files, so there's a single source of truth instead of a
+        # second editor that could drift out of sync with this one.
+        with open(capstone_output_path, "w") as f:
+            json.dump(data, f, indent=2)
+
         return jsonify({
             "message": "Final JSON saved.",
-            "json_path": output_path
+            "json_path": output_path,
+            "capstone_json_path": capstone_output_path
         })
 
     except Exception as e:

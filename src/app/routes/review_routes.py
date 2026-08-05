@@ -858,7 +858,7 @@ def get_scene_status():
                     "SB": "Storyboards",
                     "LAY": "Layout",
                     "ANIM": "Animation",
-                    "LIGHT": "Lighting"
+                    "LGT": "Lighting"
                 }
                 step_name_guess = step_map.get(code, "Thumbnails")
 
@@ -1109,7 +1109,7 @@ def get_feedback_status(scene_id, step_code):
             "THB": "Thumbnails",
             "LAY": "Layout",
             "ANIM": "Animation",
-            "LIGHT": "Lighting"
+            "LGT": "Lighting"
         }
 
         base_step_name = step_map.get(step_code)

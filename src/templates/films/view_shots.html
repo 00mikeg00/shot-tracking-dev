@@ -253,7 +253,66 @@
                 </div>
               </td>
 
-              <td class="px-3 py-2">
+              <td class="px-3 py-2 whitespace-nowrap">
+                {% if scene_layout_done %}
+                <a href="shottracker://open?action=shot_layout&shot_id={{ shot.id }}&login_name={{ session['login_name'] | urlencode }}"
+                  class="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs inline-block">
+                  Open Layout in Maya
+                </a>
+                {% if shot.layout_locked %}
+                <span class="bg-gray-600 text-white px-3 py-1 rounded text-xs inline-block">Layout Approved</span>
+                {% else %}
+                <button type="button" data-shot-id="{{ shot.id }}" data-login-name="{{ session['login_name'] }}"
+                  onclick="approveShotLayout(this)"
+                  class="bg-green-700 hover:bg-green-600 text-white px-3 py-1 rounded text-xs">
+                  Approve Layout
+                </button>
+                {% endif %}
+                {% else %}
+                <span class="text-gray-400 italic text-xs" title="Scene Layout must be marked done first">
+                  Layout locked (scene not done)
+                </span>
+                {% endif %}
+
+                {% if shot.layout_locked %}
+                <a href="shottracker://open?action=shot_animation&shot_id={{ shot.id }}&login_name={{ session['login_name'] | urlencode }}"
+                  class="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs inline-block">
+                  Open Animation in Maya
+                </a>
+                {% if shot.animation_locked %}
+                <span class="bg-gray-600 text-white px-3 py-1 rounded text-xs inline-block">Animation Approved</span>
+                {% else %}
+                <button type="button" data-shot-id="{{ shot.id }}" data-login-name="{{ session['login_name'] }}"
+                  onclick="approveShotAnimation(this)"
+                  class="bg-green-700 hover:bg-green-600 text-white px-3 py-1 rounded text-xs">
+                  Approve Animation
+                </button>
+                {% endif %}
+                {% else %}
+                <span class="text-gray-400 italic text-xs" title="Layout must be approved first">
+                  Animation locked (Layout not approved)
+                </span>
+                {% endif %}
+
+                {% if shot.animation_locked %}
+                <a href="shottracker://open?action=shot_lighting&shot_id={{ shot.id }}&login_name={{ session['login_name'] | urlencode }}"
+                  class="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs inline-block">
+                  Open Lighting in Maya
+                </a>
+                {% if shot.lighting_locked %}
+                <span class="bg-gray-600 text-white px-3 py-1 rounded text-xs inline-block">Lighting Approved</span>
+                {% else %}
+                <button type="button" data-shot-id="{{ shot.id }}" data-login-name="{{ session['login_name'] }}"
+                  onclick="approveShotLighting(this)"
+                  class="bg-green-700 hover:bg-green-600 text-white px-3 py-1 rounded text-xs">
+                  Approve Lighting
+                </button>
+                {% endif %}
+                {% else %}
+                <span class="text-gray-400 italic text-xs" title="Animation must be approved first">
+                  Lighting locked (Animation not approved)
+                </span>
+                {% endif %}
                 <button type="button" class="bg-red-800 hover:bg-red-600 text-white px-3 py-1 rounded text-xs"
                   onclick="confirmDeleteShot({{ shot.id }})">
                   Delete Shot

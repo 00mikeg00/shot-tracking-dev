@@ -245,9 +245,9 @@ def lock_step():
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     db.execute("""
-        INSERT INTO step_locks (individual_assignment_id, step_id, locked, locked_by, locked_at)
-        VALUES (?, ?, 1, ?, ?)
-        ON CONFLICT(individual_assignment_id, step_id)
+        INSERT INTO step_locks (entity_type, entity_id, step_id, locked, locked_by, locked_at)
+        VALUES ('assignment', ?, ?, 1, ?, ?)
+        ON CONFLICT(entity_type, entity_id, step_id)
         DO UPDATE SET locked = 1, locked_by = excluded.locked_by, locked_at = excluded.locked_at
     """, (individual_assignment_id, step_row["id"], user_row["id"], now))
     db.commit()
@@ -292,9 +292,9 @@ def unlock_step():
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     db.execute("""
-        INSERT INTO step_locks (individual_assignment_id, step_id, locked, unlocked_by, unlocked_at)
-        VALUES (?, ?, 0, ?, ?)
-        ON CONFLICT(individual_assignment_id, step_id)
+        INSERT INTO step_locks (entity_type, entity_id, step_id, locked, unlocked_by, unlocked_at)
+        VALUES ('assignment', ?, ?, 0, ?, ?)
+        ON CONFLICT(entity_type, entity_id, step_id)
         DO UPDATE SET locked = 0, unlocked_by = excluded.unlocked_by, unlocked_at = excluded.unlocked_at
     """, (individual_assignment_id, step_row["id"], user_row["id"], now))
     db.commit()
@@ -346,7 +346,7 @@ def steps_status():
         JOIN assignments a ON s.parent_id = a.parent_step_id
         LEFT JOIN step_codes sc ON sc.step_name = s.name
         LEFT JOIN step_locks sl
-            ON sl.individual_assignment_id = ? AND sl.step_id = s.id
+            ON sl.entity_type = 'assignment' AND sl.entity_id = ? AND sl.step_id = s.id
         LEFT JOIN users locker ON locker.id = sl.locked_by
         LEFT JOIN users unlocker ON unlocker.id = sl.unlocked_by
         WHERE a.id = ?
