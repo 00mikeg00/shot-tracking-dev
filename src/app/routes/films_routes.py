@@ -12,7 +12,7 @@ from app.utils.timeline_helper import build_timeline
 from app.models import get_all_steps, get_all_workflows
 from app.database.db import get_db
 from app.utils.auth_utils import login_required
-from app.utils.utils import find_matching_asset_file
+from app.utils.utils import find_matching_asset_file, ensure_asset_folder
 from app.models.films import (get_all_semesters,  get_users_by_group_name, get_recursive_crossflows,
     delete_film, get_all_films, add_film, seed_preproduction_steps, get_film_by_id,
     get_all_assets, get_asset_by_id, add_asset, update_asset, delete_asset, get_asset_status_summary,
@@ -2737,6 +2737,17 @@ def add_asset(film_id):
             ).fetchone()
 
             film_name = film_row["name"] if film_row else None
+
+            # Create Assets/<Category>/<Asset Name>/ on disk right away --
+            # previously only "Generate Folders" (driven by a manually
+            # re-exported film_config_v1.json) ever created asset folders,
+            # so an asset added here had nowhere to save a file into until
+            # someone re-ran that whole export/generate cycle.
+            if film_name:
+                try:
+                    ensure_asset_folder(film_name, category, name)
+                except OSError as e:
+                    print(f"⚠️ Could not create asset folder for '{name}' ({category}): {e}")
 
             resolved_path = find_matching_asset_file(
                 film_name,
