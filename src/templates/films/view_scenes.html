@@ -16,7 +16,10 @@
       class="bg-red-800 text-white px-4 py-2 rounded-lg hover:bg-red-600 {% if active_page == 'films' %}bg-yellow-800{% endif %}">
       Films
     </a>
-
+    <a href="{{ url_for('films.film_overview', film_id=film.id) }}"
+      class="bg-red-800 text-white px-4 py-2 rounded-lg hover:bg-red-600 {% if active_page == 'overview' %}bg-yellow-800{% endif %}">
+      Overview
+    </a>
     <a href="{{ url_for('films.view_scenes', film_id=film.id) }}"
       class="bg-red-800 text-white px-4 py-2 rounded-lg hover:bg-red-600 {% if active_page == 'scenes' %}bg-yellow-800{% endif %}">
       Scenes

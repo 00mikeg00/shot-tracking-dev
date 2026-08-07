@@ -26,6 +26,17 @@ assets_bp = Blueprint("assets", __name__)
 
 preprod_bp = Blueprint("preproduction", __name__)
 
+# Shared step-name groupings for phase gating (prepro-done / production-
+# unlocked) -- used by view_films(), edit_film_route(), and film_overview().
+PREPRO_STEP_NAMES = [
+    "Treatment", "Outline", "Script_Rough", "Script_Pass",
+    "Locked_Script", "Voice_Record", "Story and Script"
+]
+PRODUCTION_STEP_NAMES = [
+    "Storyboards", "FB Storyboards", "Editorial", "Layout", "FB Layout",
+    "Animation", "FB Animation", "Lighting", "FB Lighting"
+]
+
 def get_all_semesters():
     conn = get_db()
     return conn.execute("SELECT * FROM semesters ORDER BY year DESC, term DESC").fetchall()
@@ -35,27 +46,63 @@ def get_all_semesters():
 # FILMS MANAGEMENT
 # ----------------------------------------------------------------------------------------------------------------------
 
+def _get_enriched_flows(db, film_id):
+    """
+    Per-film-workflow-step status: for each step tracked in
+    film_step_progress, its nodes (with colors) and whichever one is
+    currently selected. Shared by view_films() (to gate Scenes-unlocked/
+    prepro-done) and edit_film_route() (to render the Pre-Production
+    Steps status editor).
+    """
+    flows = db.execute("""
+        SELECT s.id as step_id, s.name as step_name
+        FROM film_step_progress fsp
+        JOIN steps s ON fsp.step_id = s.id
+        WHERE fsp.film_id = ?
+    """, (film_id,)).fetchall()
+
+    enriched_flows = []
+    for flow in flows:
+        step_id = flow["step_id"]
+
+        nodes = db.execute("""
+            SELECT id as node_id, name, color
+            FROM nodes
+            WHERE step_id = ?
+            ORDER BY CAST(substr(position, instr(position, ' ') + 1) AS INTEGER)
+        """, (step_id,)).fetchall()
+
+        current = db.execute("""
+            SELECT node_id FROM film_step_progress
+            WHERE film_id = ? AND step_id = ?
+        """, (film_id, step_id)).fetchone()
+
+        selected_node_id = current["node_id"] if current else None
+        selected_node_name = None
+        for n in nodes:
+            if n["node_id"] == selected_node_id:
+                selected_node_name = n["name"]
+                break
+
+        enriched_flows.append({
+            "step_id": step_id,
+            "step_name": flow["step_name"],
+            "nodes": [dict(n) for n in nodes],
+            "selected_node_id": selected_node_id,
+            "selected_node_name": selected_node_name
+        })
+
+    return enriched_flows
+
+
 @films_bp.route("/", endpoint="view_films")
 def view_films():
     films = get_all_films()
     db = get_db()
 
-    # 🔧 Phase names
-    prepro_names = [
-    "Treatment",
-    "Outline",
-    "Script_Rough",
-    "Script_Pass",
-    "Locked_Script",
-    "Voice_Record",
-    "Story and Script"
-]
-    production_names = [
-        "Storyboards", "FB Storyboards", "Editorial", "Layout", "FB Layout",
-        "Animation", "FB Animation", "Lighting", "FB Lighting"
-    ]
+    prepro_names = PREPRO_STEP_NAMES
+    production_names = PRODUCTION_STEP_NAMES
     post_names = ["Sound", "Music", "Final Edit", "Delivery"]
-
 
     for film in films:
         flow_row = db.execute(
@@ -64,44 +111,7 @@ def view_films():
         ).fetchone()
         film["workflow_name"] = flow_row["name"] if flow_row else None
 
-        flows = db.execute("""
-            SELECT s.id as step_id, s.name as step_name
-            FROM film_step_progress fsp
-            JOIN steps s ON fsp.step_id = s.id
-            WHERE fsp.film_id = ?
-        """, (film["id"],)).fetchall()
-
-        enriched_flows = []
-        for flow in flows:
-            step_id = flow["step_id"]
-
-            nodes = db.execute("""
-                SELECT id as node_id, name, color
-                FROM nodes
-                WHERE step_id = ?
-                ORDER BY CAST(substr(position, instr(position, ' ') + 1) AS INTEGER)
-            """, (step_id,)).fetchall()
-
-            # Get selected status (if any)
-            current = db.execute("""
-                SELECT node_id FROM film_step_progress
-                WHERE film_id = ? AND step_id = ?
-            """, (film["id"], step_id)).fetchone()
-
-            selected_node_id = current["node_id"] if current else None
-            selected_node_name = None
-            for n in nodes:
-                if n["node_id"] == selected_node_id:
-                    selected_node_name = n["name"]
-                    break
-
-            enriched_flows.append({
-                "step_id": step_id,
-                "step_name": flow["step_name"],
-                "nodes": [dict(n) for n in nodes],
-                "selected_node_id": selected_node_id,
-                "selected_node_name": selected_node_name
-            })
+        enriched_flows = _get_enriched_flows(db, film["id"])
 
         # ------------------------------
         # Phase checks
@@ -127,32 +137,6 @@ def view_films():
         )
         film["production_unlocked"] = film["prepro_done"] and (bool(prod_steps) or film["has_scenes"])
 
-
-        # 🔧 Decide what to show
-        if not film["prepro_done"]:
-            # Still in Pre-Pro
-            film["visible_flows"] = [f for f in enriched_flows if f["step_name"] in prepro_names]
-
-        elif film["prepro_done"] and not film["production_unlocked"]:
-            # Pre-Pro finished, but Production not yet seeded → just show Pre-Pro as Complete
-            film["visible_flows"] = [f for f in enriched_flows if f["step_name"] in prepro_names]
-
-        elif film["production_unlocked"] and not film["production_done"]:
-            # In Production
-            film["visible_flows"] = [f for f in enriched_flows if f["step_name"] in prepro_names + production_names]
-
-        else:
-            # Production finished → show everything
-            film["visible_flows"] = enriched_flows
-
-
-        # Keep the full list for dropdowns and other logic
-        film["individual_flows"] = enriched_flows
-        print(f"DEBUG: Film={film['name']} prepro_done={film['prepro_done']} production_done={film['production_done']}")
-
-
-
-
     unlocked_film = request.args.get("unlocked_film")
 
     return render_template(
@@ -163,6 +147,55 @@ def view_films():
     production_names=production_names,
     post_names=post_names
 )
+
+@films_bp.route("/<int:film_id>/overview")
+def film_overview(film_id):
+    """
+    The "main view" of one film -- overall progress at a glance
+    (Pre-Production status + Production charts broken down by Scenes/
+    Shots/Asset categories). This is what a film's name links to from the
+    films list; Scenes/Assets are their own tabs from here.
+    """
+    db = get_db()
+
+    film_row = db.execute("""
+        SELECT f.*, s.term || ' ' || s.year AS semester,
+               d.name AS director_name, u.name AS upm_name
+        FROM films f
+        LEFT JOIN semesters s ON f.semester_id = s.id
+        LEFT JOIN users d ON f.director_id = d.id
+        LEFT JOIN users u ON f.upm_id = u.id
+        WHERE f.id = ?
+    """, (film_id,)).fetchone()
+    if not film_row:
+        return "Film not found", 404
+    film = dict(film_row)
+
+    flow_row = db.execute("SELECT name FROM steps WHERE id = ?", (film["step_id"],)).fetchone()
+    film["workflow_name"] = flow_row["name"] if flow_row else None
+
+    enriched_flows = _get_enriched_flows(db, film_id)
+
+    prepro_flows = [f for f in enriched_flows if f["step_name"] in PREPRO_STEP_NAMES and f["nodes"]]
+    film["prepro_done"] = bool(prepro_flows) and all(
+        f.get("selected_node_name") == "Approved" for f in prepro_flows
+    )
+
+    scene_count = db.execute(
+        "SELECT COUNT(*) AS total FROM scenes WHERE film_id = ?", (film_id,)
+    ).fetchone()
+    film["has_scenes"] = scene_count["total"] > 0
+
+    prod_flows = [f for f in enriched_flows if f["step_name"] in PRODUCTION_STEP_NAMES and f["nodes"]]
+    film["production_unlocked"] = film["prepro_done"] and (bool(prod_flows) or film["has_scenes"])
+
+    return render_template(
+        "films/film_overview.html",
+        film=film,
+        prepro_flows=prepro_flows,
+        all_films=get_all_films(),
+        active_page="overview"
+    )
 
 @films_bp.route("/add", methods=["GET", "POST"])
 def add_film_route():
@@ -473,6 +506,12 @@ def edit_film_route(film_id):
         directors = get_users_by_group_name("Director")
         upms = get_users_by_group_name("UPM")
 
+        # Pre-Production Steps status editor -- this is the only place a
+        # film's pre-production steps get approved, which is what unlocks
+        # Scene creation for it.
+        enriched_flows = _get_enriched_flows(db, film_id)
+        prepro_flows = [f for f in enriched_flows if f["step_name"] in PREPRO_STEP_NAMES and f["nodes"]]
+
         if request.method == "POST":
             # Update film metadata
             name = request.form["film_name"]
@@ -501,7 +540,8 @@ def edit_film_route(film_id):
             child_steps=all_child_steps,
             semesters=semesters,
             directors=directors,
-            upms=upms
+            upms=upms,
+            prepro_flows=prepro_flows
         )
 
     except Exception as e:
