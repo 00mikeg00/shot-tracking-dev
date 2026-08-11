@@ -372,22 +372,61 @@ def get_review_files():
     planning_rows = cursor.execute("""
         SELECT pf.id, pf.file_path, pf.file_name, pf.page_order,
                pf.individual_assignment_id,
-               a.id AS assignment_id,
+               a.id AS assignment_id, a.name AS assignment_name,
+               owner.name AS student_name,
                c.id AS class_id, c.class_name,
                s.year, s.term
         FROM planning_files pf
         JOIN individual_assignments ia ON pf.individual_assignment_id = ia.id
         JOIN assignments a ON ia.assignment_id = a.id
+        JOIN users owner ON ia.users_id = owner.id
         JOIN classes c ON a.class_id = c.id
         JOIN semesters s ON c.semester_id = s.id
         ORDER BY pf.individual_assignment_id, pf.page_order
     """).fetchall()
 
-    for row in planning_rows:
-        # Same _R convention videos use: unreviewed drawings still end in
-        # their plain filename, reviewed ones got renamed by save_annotations.
-        is_reviewed = bool(re.search(r"_R\.(png|jpe?g)$", row["file_name"], re.IGNORECASE))
+    # 🎥 Video references — also DB-backed, same merge point as planning
+    # drawings. Unlike drawings these are reference material the instructor
+    # views (not annotated/reviewed per-file) -- there's no per-file _R
+    # lifecycle for these, so queue membership below is keyed off the
+    # Planning step's own status instead.
+    video_ref_rows = cursor.execute("""
+        SELECT vr.id, vr.file_path, vr.file_name, vr.source_type, vr.external_url,
+               vr.individual_assignment_id,
+               a.id AS assignment_id, a.name AS assignment_name,
+               owner.name AS student_name,
+               c.id AS class_id, c.class_name, s.year, s.term
+        FROM video_reference_files vr
+        JOIN individual_assignments ia ON vr.individual_assignment_id = ia.id
+        JOIN assignments a ON ia.assignment_id = a.id
+        JOIN users owner ON ia.users_id = owner.id
+        JOIN classes c ON a.class_id = c.id
+        JOIN semesters s ON c.semester_id = s.id
+        ORDER BY vr.individual_assignment_id, vr.uploaded_at
+    """).fetchall()
 
+    # One shared "does this still need a look" signal for both drawings and
+    # video references: show in the to-review queue while Planning is at
+    # Submitted, drop out once it's Graded/Retake (an instructor decision),
+    # and don't show at all before Submitted (In Progress/Needs Help are
+    # still the student's work-in-progress, not something to review yet).
+    planning_ia_ids = sorted({row["individual_assignment_id"] for row in planning_rows} |
+                              {row["individual_assignment_id"] for row in video_ref_rows})
+    planning_status_by_ia = {}
+    if planning_ia_ids:
+        placeholders = ",".join("?" * len(planning_ia_ids))
+        status_rows = cursor.execute(f"""
+            SELECT ias.individual_assignment_id, ias.current_status
+            FROM individual_assignment_statuses ias
+            JOIN steps s ON ias.step_id = s.id
+            WHERE s.name = 'Planning' AND ias.individual_assignment_id IN ({placeholders})
+        """, planning_ia_ids).fetchall()
+        planning_status_by_ia = {r["individual_assignment_id"]: r["current_status"] for r in status_rows}
+
+    def _planning_needs_review(ia_id):
+        return (planning_status_by_ia.get(ia_id) or "").strip().lower() == "submitted"
+
+    for row in planning_rows:
         key = f"{row['year']}-{row['term']} - {row['class_name']}"
         all_assignments.setdefault(key, [])
         all_assignments[key].append({
@@ -395,45 +434,25 @@ def get_review_files():
             "file_path": row["file_path"],
             "scene_id": None,
             "individual_assignment_id": row["individual_assignment_id"],
+            "assignment_name": row["assignment_name"],
+            "student_name": row["student_name"],
             "is_planning_drawing": True,
             "page_order": row["page_order"],
         })
 
-        # Unreviewed drawings also belong in the "Assignments to Review"
-        # queue, same as an unreviewed video would -- once save_annotations
-        # renames it to _R, it drops out of this list on its own.
-        if not is_reviewed:
+        if _planning_needs_review(row["individual_assignment_id"]):
             assignments.append({
                 "class_id": row["class_id"],
                 "class_name": row["class_name"],
                 "assignment_id": row["assignment_id"],
+                "assignment_name": row["assignment_name"],
+                "student_name": row["student_name"],
                 "individual_assignment_id": row["individual_assignment_id"],
                 "file_name": row["file_name"],
                 "file_path": row["file_path"],
-                "is_reviewed": False,
                 "is_planning_drawing": True,
                 "page_order": row["page_order"],
             })
-
-    # 🎥 Video references — also DB-backed, same merge point as planning
-    # drawings. Unlike drawings these are reference material the instructor
-    # views (not annotated/reviewed per-file), so unlike the block above
-    # there's no _R lifecycle and nothing gets added to the to-review queue
-    # -- they always live in all_assignments only, feeding into the single
-    # Planning-step grade alongside everything else.
-    video_ref_rows = cursor.execute("""
-        SELECT vr.id, vr.file_path, vr.file_name, vr.source_type, vr.external_url,
-               vr.individual_assignment_id,
-               a.name AS assignment_name, u.name AS uploader_name,
-               c.class_name, s.year, s.term
-        FROM video_reference_files vr
-        JOIN individual_assignments ia ON vr.individual_assignment_id = ia.id
-        JOIN assignments a ON ia.assignment_id = a.id
-        JOIN classes c ON a.class_id = c.id
-        JOIN semesters s ON c.semester_id = s.id
-        JOIN users u ON vr.uploaded_by_user_id = u.id
-        ORDER BY vr.individual_assignment_id, vr.uploaded_at
-    """).fetchall()
 
     for row in video_ref_rows:
         key = f"{row['year']}-{row['term']} - {row['class_name']}"
@@ -445,16 +464,27 @@ def get_review_files():
             # file_name -- a raw URL won't parse that way, so link entries
             # get a synthetic name that follows the same convention.
             # external_url (below) is what's actually opened on click.
-            display_name = f"{row['assignment_name']}_{row['uploader_name']}_PL_VideoRef_Link.url"
-        all_assignments[key].append({
+            display_name = f"{row['assignment_name']}_{row['student_name']}_PL_VideoRef_Link.url"
+        entry = {
             "file_name": display_name,
             "file_path": row["file_path"],
             "scene_id": None,
             "individual_assignment_id": row["individual_assignment_id"],
+            "assignment_name": row["assignment_name"],
+            "student_name": row["student_name"],
             "is_video_reference": True,
             "source_type": row["source_type"],
             "external_url": row["external_url"],
-        })
+        }
+        all_assignments[key].append(entry)
+
+        if _planning_needs_review(row["individual_assignment_id"]):
+            assignments.append({
+                **entry,
+                "class_id": row["class_id"],
+                "class_name": row["class_name"],
+                "assignment_id": row["assignment_id"],
+            })
 
     reviewed = films_raw.get("reviewed", {})
     to_review = films_raw.get("to_review", {})

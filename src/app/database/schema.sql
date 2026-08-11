@@ -59,6 +59,9 @@ CREATE TABLE IF NOT EXISTS assignments (
     name TEXT NOT NULL,
     start_date TEXT NOT NULL,
     completion_date TEXT NOT NULL,
+    frame_start INTEGER,
+    frame_end INTEGER,
+    max_points INTEGER,
     FOREIGN KEY (class_id) REFERENCES classes (id)
 );
 

@@ -78,6 +78,7 @@
           showConfirmButton: false
         });
         loadPlanningDrawings(individualAssignmentId, `planning-list-${individualAssignmentId}`);
+        refreshPlanningCompletion(individualAssignmentId);
       } else {
         Swal.fire("Error", result.error || "Upload failed", "error");
       }
@@ -141,6 +142,7 @@
       const data = await res.json();
       if (res.ok) {
         loadPlanningDrawings(assignmentId, `planning-list-${assignmentId}`);
+        refreshPlanningCompletion(assignmentId);
       } else {
         Swal.fire("Error", data.error || "Delete failed", "error");
       }
@@ -221,6 +223,7 @@
           showConfirmButton: false
         });
         loadVideoReferences(individualAssignmentId, `videoref-list-${individualAssignmentId}`);
+        refreshPlanningCompletion(individualAssignmentId);
       } else {
         Swal.fire("Error", result.error || "Upload failed", "error");
       }
@@ -246,6 +249,7 @@
 
       if (res.ok) {
         loadVideoReferences(individualAssignmentId, `videoref-list-${individualAssignmentId}`);
+        refreshPlanningCompletion(individualAssignmentId);
       } else {
         Swal.fire("Error", result.error || "Could not add link", "error");
       }
@@ -309,6 +313,7 @@
       const data = await res.json();
       if (res.ok) {
         loadVideoReferences(assignmentId, `videoref-list-${assignmentId}`);
+        refreshPlanningCompletion(assignmentId);
       } else {
         Swal.fire("Error", data.error || "Delete failed", "error");
       }
@@ -367,6 +372,192 @@
     const dropped = e.dataTransfer && e.dataTransfer.files;
     if (dropped && dropped.length > 0) {
       await uploadVideoReference(assignmentId, dropped[0], zone);
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Submit Planning modal — consolidates drawings/video-ref/x-sheet into
+  // one place. Reuses the exact same upload/list markup (ids, classes,
+  // data-assignment-id) the inline dropzones used before, just rendered
+  // inside the modal instead -- the existing delegated listeners and
+  // success-callback ID patterns above don't need to know the difference.
+  // ---------------------------------------------------------------------
+
+  async function refreshPlanningCompletion(individualAssignmentId) {
+    try {
+      const res = await fetch(`/planning/completion/${individualAssignmentId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+
+      const checkDrawings = document.getElementById("sp-check-drawings");
+      const checkVideoRef = document.getElementById("sp-check-videoref");
+      const checkXsheet = document.getElementById("sp-check-xsheet");
+      const submitBtn = document.getElementById("submit-planning-submit");
+
+      if (checkDrawings) checkDrawings.textContent = data.drawings ? "✅" : "☐";
+      if (checkVideoRef) checkVideoRef.textContent = data.video_reference ? "✅" : "☐";
+      if (checkXsheet) checkXsheet.textContent = data.xsheet ? "✅" : "☐";
+
+      if (submitBtn && String(submitBtn.dataset.assignmentId) === String(individualAssignmentId)) {
+        submitBtn.disabled = !(data.drawings && data.video_reference && data.xsheet);
+      }
+    } catch (err) {
+      console.warn("Could not load planning completion:", err);
+    }
+  }
+
+  function ensureSubmitPlanningModal() {
+    let modal = document.getElementById("submit-planning-modal");
+    if (!modal) {
+      modal = document.createElement("div");
+      modal.id = "submit-planning-modal";
+      modal.className = "fixed inset-0 bg-black/70 flex items-center justify-center z-50 hidden";
+      document.body.appendChild(modal);
+    }
+    return modal;
+  }
+
+  function closeSubmitPlanningModal() {
+    const modal = document.getElementById("submit-planning-modal");
+    if (modal) modal.classList.add("hidden");
+  }
+
+  function openSubmitPlanningModal(individualAssignmentId, assignmentName) {
+    const modal = ensureSubmitPlanningModal();
+
+    modal.innerHTML = `
+      <div class="bg-gray-900 rounded-lg p-6 w-full max-w-lg max-h-[85vh] overflow-y-auto mx-4">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-white font-bold text-lg">Submit Planning — ${assignmentName}</h3>
+          <button type="button" class="submit-planning-close text-gray-400 hover:text-white text-xl leading-none">✕</button>
+        </div>
+
+        <div class="space-y-5">
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <span id="sp-check-drawings" class="text-gray-500">☐</span>
+              <span class="text-white text-sm font-semibold">Drawings</span>
+            </div>
+            <label id="planning-dropzone-${individualAssignmentId}" for="planning-input-${individualAssignmentId}"
+                   class="planning-dropzone cursor-pointer flex items-center justify-center gap-1
+                          text-xs text-gray-300 border border-dashed border-gray-500 rounded
+                          px-2 py-2 hover:bg-gray-700 hover:border-blue-400 transition"
+                   data-assignment-id="${individualAssignmentId}">
+              🖼️ Drop planning drawings here or click to upload
+            </label>
+            <input id="planning-input-${individualAssignmentId}" type="file" accept="image/png,image/jpeg" multiple
+                   class="hidden planning-drawings-upload" data-assignment-id="${individualAssignmentId}" />
+            <div id="planning-list-${individualAssignmentId}" class="text-gray-400 text-xs mt-1"></div>
+          </div>
+
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <span id="sp-check-videoref" class="text-gray-500">☐</span>
+              <span class="text-white text-sm font-semibold">Video Reference</span>
+            </div>
+            <label id="videoref-dropzone-${individualAssignmentId}" for="videoref-input-${individualAssignmentId}"
+                   class="videoref-dropzone cursor-pointer flex items-center justify-center gap-1
+                          text-xs text-gray-300 border border-dashed border-gray-500 rounded
+                          px-2 py-2 hover:bg-gray-700 hover:border-blue-400 transition"
+                   data-assignment-id="${individualAssignmentId}">
+              🎥 Drop a reference video here or click to upload
+            </label>
+            <input id="videoref-input-${individualAssignmentId}" type="file" accept="video/*"
+                   class="hidden videoref-upload" data-assignment-id="${individualAssignmentId}" />
+            <div class="flex gap-1 mt-1">
+              <input id="videoref-link-input-${individualAssignmentId}" type="text" placeholder="...or paste a video link"
+                     class="videoref-link-text flex-1 bg-gray-700 text-white text-xs px-2 py-1 rounded" />
+              <button type="button" class="videoref-link-submit text-xs bg-gray-600 hover:bg-gray-500 text-white px-2 rounded"
+                      data-assignment-id="${individualAssignmentId}"
+                      data-link-input="videoref-link-input-${individualAssignmentId}">Add</button>
+            </div>
+            <div id="videoref-list-${individualAssignmentId}" class="text-gray-400 text-xs mt-1"></div>
+          </div>
+
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <span id="sp-check-xsheet" class="text-gray-500">☐</span>
+              <span class="text-white text-sm font-semibold">X-Sheet</span>
+            </div>
+            <a href="/xsheet/${individualAssignmentId}/view" target="_blank" rel="noopener noreferrer"
+               class="block w-full text-center text-xs bg-gray-700 hover:bg-gray-600 text-white rounded px-2 py-2">
+              Open X-Sheet
+            </a>
+          </div>
+        </div>
+
+        <div class="flex gap-2 mt-6">
+          <button type="button" id="submit-planning-submit" disabled
+                  data-assignment-id="${individualAssignmentId}"
+                  class="flex-1 bg-blue-600 disabled:bg-gray-600 disabled:cursor-not-allowed hover:bg-blue-500 text-white text-sm rounded px-3 py-2 transition">
+            Submit Planning
+          </button>
+        </div>
+      </div>
+    `;
+
+    modal.classList.remove("hidden");
+
+    loadPlanningDrawings(individualAssignmentId, `planning-list-${individualAssignmentId}`);
+    loadVideoReferences(individualAssignmentId, `videoref-list-${individualAssignmentId}`);
+    refreshPlanningCompletion(individualAssignmentId);
+
+    // The X-sheet opens in its own tab (it's a full editable page, not a
+    // dropzone), so there's no upload callback to hook -- refresh the
+    // checklist when focus returns here instead, in case it changed there.
+    window.addEventListener("focus", () => {
+      if (!modal.classList.contains("hidden")) {
+        refreshPlanningCompletion(individualAssignmentId);
+      }
+    });
+  }
+
+  document.addEventListener("click", (e) => {
+    const openBtn = e.target.closest && e.target.closest(".submit-planning-open");
+    if (openBtn) {
+      openSubmitPlanningModal(openBtn.dataset.assignmentId, openBtn.dataset.assignmentName);
+      return;
+    }
+    if (e.target.closest && e.target.closest(".submit-planning-close")) {
+      closeSubmitPlanningModal();
+      return;
+    }
+    // Click on the overlay itself (not its content) closes it.
+    if (e.target.id === "submit-planning-modal") {
+      closeSubmitPlanningModal();
+    }
+  });
+
+  document.addEventListener("click", async (e) => {
+    const submitBtn = e.target.closest && e.target.closest("#submit-planning-submit");
+    if (!submitBtn || submitBtn.disabled) return;
+
+    const assignmentId = submitBtn.dataset.assignmentId;
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Submitting...";
+
+    try {
+      const res = await fetch(`/planning/submit/${assignmentId}`, { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        await Swal.fire({
+          icon: "success",
+          title: "Planning submitted!",
+          timer: 1500,
+          showConfirmButton: false
+        });
+        closeSubmitPlanningModal();
+        fetchUserAssignmentsForSemester();
+      } else {
+        Swal.fire("Error", data.error || "Submit failed", "error");
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Submit Planning";
+      }
+    } catch (err) {
+      console.error("Submit planning error:", err);
+      Swal.fire("Error", "See console for details", "error");
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Submit Planning";
     }
   });
 
@@ -545,9 +736,16 @@
 
         // Build OPEN button URI — scoped to this specific assignment so
         // Assignments.py opens straight into it instead of showing a picker.
+        // Suppressed for Planning-only assignments (every step name is
+        // Planning/FB-Planning/Grade-Planning) -- there's no Maya file to
+        // open for those, just drawings/video ref/x-sheet. Assignments that
+        // include Planning alongside Blocking/Polish/etc. still get OPEN,
+        // since those steps do need Maya.
+        const isPlanningOnlyAssignment = steps.length > 0 && steps.every(s => /planning/i.test(s.step_name || ""));
+
         const assignmentId = steps[0]?.assignment_id || "";
         const loginName = window.currentLoginName || "";
-        const openUri = assignmentId && loginName
+        const openUri = (!isPlanningOnlyAssignment && assignmentId && loginName)
           ? `shottracker://open?class_id=${class_id}&login_name=${encodeURIComponent(loginName)}&assignment_id=${assignmentId}`
           : null;
 
@@ -643,65 +841,22 @@
             if (dropdown) updateDropdownColor(dropdown);
           }, 0);
 
-          // 🖊️ Planning drawings upload — only shown for assignments whose
-          // workflow actually includes a Planning step.
+          // 🖊️ Submit Planning — only shown for assignments whose workflow
+          // actually includes a Planning step. Opens a modal covering all
+          // three Planning components (drawings, video reference, x-sheet).
           if (step_name === "Planning") {
-            const dropzoneId = `planning-dropzone-${individual_assignment_id}`;
-            const inputId = `planning-input-${individual_assignment_id}`;
-            const listId = `planning-list-${individual_assignment_id}`;
-
-            const planningRow = document.createElement("div");
-            planningRow.classList.add("mt-1", "mb-1");
-            planningRow.innerHTML = `
-              <label id="${dropzoneId}" for="${inputId}"
-                     class="planning-dropzone cursor-pointer flex items-center justify-center gap-1
-                            text-xs text-gray-300 border border-dashed border-gray-500 rounded
-                            px-2 py-2 hover:bg-gray-700 hover:border-blue-400 transition"
-                     data-assignment-id="${individual_assignment_id}">
-                🖼️ Drop planning drawings here or click to upload
-              </label>
-              <input id="${inputId}" type="file" accept="image/png,image/jpeg" multiple
-                     class="hidden planning-drawings-upload"
-                     data-assignment-id="${individual_assignment_id}" />
-              <div id="${listId}" class="text-gray-400 text-xs mt-1"></div>
+            const submitRow = document.createElement("div");
+            submitRow.classList.add("mt-1", "mb-1");
+            submitRow.innerHTML = `
+              <button type="button"
+                      class="submit-planning-open w-full text-xs bg-gray-700 hover:bg-gray-600 text-white
+                             border border-gray-500 rounded px-2 py-2 transition"
+                      data-assignment-id="${individual_assignment_id}"
+                      data-assignment-name="${assignment_name}">
+                📋 Submit Planning
+              </button>
             `;
-            stepsPanel.appendChild(planningRow);
-
-            loadPlanningDrawings(individual_assignment_id, listId);
-
-            // 🎥 Video reference — upload a clip (converted server-side,
-            // synchronous so this can take a little while) or paste a link.
-            const vrDropzoneId = `videoref-dropzone-${individual_assignment_id}`;
-            const vrInputId = `videoref-input-${individual_assignment_id}`;
-            const vrLinkInputId = `videoref-link-input-${individual_assignment_id}`;
-            const vrListId = `videoref-list-${individual_assignment_id}`;
-
-            const videoRefRow = document.createElement("div");
-            videoRefRow.classList.add("mt-2", "mb-1");
-            videoRefRow.innerHTML = `
-              <label id="${vrDropzoneId}" for="${vrInputId}"
-                     class="videoref-dropzone cursor-pointer flex items-center justify-center gap-1
-                            text-xs text-gray-300 border border-dashed border-gray-500 rounded
-                            px-2 py-2 hover:bg-gray-700 hover:border-blue-400 transition"
-                     data-assignment-id="${individual_assignment_id}">
-                🎥 Drop a reference video here or click to upload
-              </label>
-              <input id="${vrInputId}" type="file" accept="video/*"
-                     class="hidden videoref-upload"
-                     data-assignment-id="${individual_assignment_id}" />
-              <div class="flex gap-1 mt-1">
-                <input id="${vrLinkInputId}" type="text" placeholder="...or paste a video link"
-                       class="videoref-link-text flex-1 bg-gray-700 text-white text-xs px-2 py-1 rounded" />
-                <button type="button"
-                        class="videoref-link-submit text-xs bg-gray-600 hover:bg-gray-500 text-white px-2 rounded"
-                        data-assignment-id="${individual_assignment_id}"
-                        data-link-input="${vrLinkInputId}">Add</button>
-              </div>
-              <div id="${vrListId}" class="text-gray-400 text-xs mt-1"></div>
-            `;
-            stepsPanel.appendChild(videoRefRow);
-
-            loadVideoReferences(individual_assignment_id, vrListId);
+            stepsPanel.appendChild(submitRow);
           }
         });
 

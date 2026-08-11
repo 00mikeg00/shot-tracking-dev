@@ -122,7 +122,7 @@ def save_assignment_config_semester(semester_id):
     Saves the assignment configuration for a semester.
     Accepts either numeric IDs or text-based names like '2025-Fall' or 'Semester-2025'.
     """
-    import json, os
+    import json, os, tempfile
     from flask import request, jsonify
     from app.database.db import get_db
 
@@ -260,7 +260,34 @@ def save_assignment_config_semester(semester_id):
         json.dump(json_obj, f, indent=2)
 
     print(f"✅ Config saved successfully to {output_path}")
-    return jsonify({"success": True, "path": output_path})
+
+    # ✅ Mirror to artscifs1 so lab machine installs can pull from
+    # %SRC%\Configs like every other asset, instead of the c$ admin
+    # share on GAAAP1PRD01W (SYSTEM-as-another-machine has no rights
+    # there -- confirmed via install_log ERROR 5, 2026-08-10).
+    share_warning = None
+    share_dir = r"\\artscifs1.ad.uc.edu\Departments\GAA\UC_GAA\Configs"
+    share_path = os.path.join(share_dir, "assignments_config.json")
+    try:
+        os.makedirs(share_dir, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=share_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(json_obj, f, indent=2)
+            os.replace(tmp_path, share_path)
+            print(f"✅ Config mirrored to {share_path}")
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
+    except Exception as share_err:
+        share_warning = f"Saved locally, but sync to share failed: {share_err}"
+        print(f"⚠️ {share_warning}")
+
+    resp = {"success": True, "path": output_path}
+    if share_warning:
+        resp["warning"] = share_warning
+    return jsonify(resp)
 
 
 @config_bp.route("/assignment-config/files", methods=["GET"])

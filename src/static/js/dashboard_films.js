@@ -359,6 +359,41 @@ async function fetchDashboardFilmShots() {
             stepRow.appendChild(label);
             stepRow.appendChild(buildShotStatusDropdown(shot, step));
             stepRow.appendChild(due);
+
+            // Shot-level Layout/Animation OPEN -- only meaningful once the
+            // gating condition is met (CapstoneLayout.py/CapstoneAnimation.py's
+            // run_shot() enforce these server-side too; this just keeps the
+            // button truthful about it instead of always showing enabled).
+            const SHOT_OPEN_CONFIG = {
+              "Layout": {
+                action: "shot_layout",
+                ready: shot.scene_layout_done,
+                lockedTitle: "Not ready yet — scene Layout hasn't been approved"
+              },
+              "Animation": {
+                action: "shot_animation",
+                ready: shot.scene_layout_done,
+                lockedTitle: "Not ready yet — scene Layout hasn't been marked done"
+              }
+            };
+            const openConfig = SHOT_OPEN_CONFIG[step.step_name];
+            if (openConfig && shot.shot_id) {
+              const loginParam = encodeURIComponent(window.currentLoginName || "");
+              if (openConfig.ready) {
+                const openLink = document.createElement("a");
+                openLink.href = `shottracker://open?action=${openConfig.action}&shot_id=${shot.shot_id}&login_name=${loginParam}`;
+                openLink.className = "bg-blue-700 hover:bg-blue-600 text-white px-2 py-1 rounded text-xs";
+                openLink.textContent = "OPEN";
+                stepRow.appendChild(openLink);
+              } else {
+                const lockedSpan = document.createElement("span");
+                lockedSpan.className = "bg-gray-700 text-gray-400 px-2 py-1 rounded text-xs cursor-not-allowed";
+                lockedSpan.title = openConfig.lockedTitle;
+                lockedSpan.textContent = "🔒 OPEN";
+                stepRow.appendChild(lockedSpan);
+              }
+            }
+
             card.appendChild(stepRow);
           });
 
@@ -412,23 +447,32 @@ function renderUserAssets() {
         return;
       }
 
-      // Build header and rows
-      const rows = assets.map(a => {
-        const due = a.due_date ? a.due_date : "—";
-        const statusColor = a.node_color || "#666";
-        return `
-          <tr class="border-t border-slate-700 hover:bg-slate-700 text-sm">
-            <td class="px-4 py-2">${a.name}<br><span class="text-xs text-gray-400">${a.category}</span></td>
-            <td class="px-4 py-2">${a.film_name}</td>
-            <td class="px-4 py-2">${a.step_name}</td>
-            <td class="px-4 py-2">${due}</td>
-            <td class="px-4 py-2">
-              <select class="rounded px-2 py-1 text-sm" style="background-color: ${statusColor}; color: white;" disabled>
-                <option selected>${a.status}</option>
-              </select>
-            </td>
-          </tr>`;
-      }).join("");
+      // One row per asset, not one per MOD/TEX/RIG step -- same grouping
+      // idea as the assignments widget (one card per assignment, not one
+      // per Blocking/Blocking Plus/Polish). Within each asset's own rows
+      // (this user's assigned steps for it), show whichever one is
+      // is_active_step -- that's the step actually actionable right now.
+      // If none of this user's own rows for this asset are active (e.g.
+      // they only had Modeling and it's since moved on to someone else's
+      // Texture/Surface), fall back to their first row so the asset still
+      // shows up, just with OPEN correctly greyed out.
+      //
+      // Proxy is grouped SEPARATELY from the Modeling/Texture-Surface/
+      // Rigging trio for the same asset -- it's not part of that
+      // sequential progression (no lock/FB gate at all, see
+      // migrate_add_proxy_step.py), so it shouldn't get collapsed away
+      // just because Modeling happens to also be active right now. A
+      // Character/Rigs asset the user is assigned on both fronts can
+      // legitimately show two rows: one for Proxy, one for MOD/TEX/RIG.
+      const grouped = new Map();
+      for (const a of assets) {
+        const key = a.step_name === "Proxy" ? `${a.asset_id}::proxy` : a.asset_id;
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key).push(a);
+      }
+      const representatives = Array.from(grouped.values()).map(
+        group => group.find(a => a.is_active_step) || group[0]
+      );
 
       assetList.innerHTML = `
       <table class="min-w-full text-white text-sm table-auto">
@@ -439,10 +483,11 @@ function renderUserAssets() {
             <th class="px-4 py-2 text-left">Step</th>
             <th class="px-4 py-2 text-left">Due Date</th>
             <th class="px-4 py-2 text-left">Status</th>
+            <th class="px-4 py-2 text-left"></th>
           </tr>
         </thead>
         <tbody>
-          ${assets.map(a => {
+          ${representatives.map(a => {
         const due = a.due_date || "—";
             // 🧩 Sort step_nodes by Y value from their "position" string (e.g. "100 30")
             const nodeOptions = a.step_nodes
@@ -474,10 +519,26 @@ function renderUserAssets() {
                 <td class="px-4 py-2">
                   <select
                       class="text-black text-sm px-2 py-1 rounded"
-                      data-asset-id="${a.asset_id}" 
+                      data-asset-id="${a.asset_id}"
                       data-step-id="${a.step_id}">
                     ${nodeOptions}
                   </select>
+                </td>
+                <td class="px-4 py-2">
+                  ${(() => {
+            const isProxy = a.step_name === "Proxy";
+            // Proxy has no lock/FB gate at all -- always openable, and its
+            // URI needs step_name=Proxy so Assets.py routes it to Proxy's
+            // own independent lineage instead of the MOD/TEX/RIG gated flow.
+            const canOpen = isProxy || a.is_active_step;
+            const loginParam = encodeURIComponent(window.currentLoginName || "");
+            const openUri = isProxy
+              ? `shottracker://open?action=asset&asset_id=${a.asset_id}&step_name=Proxy&login_name=${loginParam}`
+              : `shottracker://open?action=asset&asset_id=${a.asset_id}&login_name=${loginParam}`;
+            return canOpen
+              ? `<a href="${openUri}" class="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm inline-block">OPEN</a>`
+              : `<span class="bg-gray-700 text-gray-400 px-3 py-1 rounded text-sm inline-block cursor-not-allowed" title="Not ready yet — the prior step isn't done">🔒 OPEN</span>`;
+          })()}
                 </td>
               </tr>
             `;

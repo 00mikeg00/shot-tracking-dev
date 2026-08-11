@@ -1021,6 +1021,22 @@ def view_scenes(film_id):
 
     steps_map = {step["id"]: step for step in steps}
 
+    # Scenes whose Layout is already marked done -- greys out/relabels
+    # "Mark Layout Done" so it can't be clicked twice (it's a one-way gate,
+    # same as everywhere else that reads this step_locks row).
+    layout_done_scene_ids = set()
+    layout_step_row = db.execute(
+        "SELECT id FROM steps WHERE parent_id = ? AND name = 'Layout'",
+        (film["step_id"],)
+    ).fetchone()
+    if layout_step_row:
+        layout_done_scene_ids = {
+            row["entity_id"] for row in db.execute("""
+                SELECT entity_id FROM step_locks
+                WHERE entity_type = 'scene_step' AND step_id = ? AND locked = 1
+            """, (layout_step_row["id"],)).fetchall()
+        }
+
     artists = db.execute("""
         SELECT u.id, u.name
         FROM film_crew fc
@@ -1100,6 +1116,7 @@ def view_scenes(film_id):
         )
 
         scene_dict["step_charts"] = sorted_charts
+        scene_dict["layout_done"] = scene["id"] in layout_done_scene_ids
         enriched_scenes.append(scene_dict)
 
     return render_template(
@@ -1115,6 +1132,392 @@ def view_scenes(film_id):
         visible_step_ids={step["id"] for step in steps},
         crew_artists=artists
     )
+
+
+# ── Edit Layout Config (Phase 5 addendum) ─────────────────────────────
+# Scene-scoped asset assignment (Character/Rigs, Props - 2D/3D, BGs, Light
+# Rigs, Sets) + per-shot Camera Framing, authored by the Layout Coordinator
+# ahead of time so CapstoneLayout.py can reference/frame everything silently
+# on file open -- no in-Maya picker. See migrate_add_layout_config.py for
+# the shots.camera_framing column and the "Layout Coordinator" group this
+# is gated behind.
+
+LAYOUT_CONFIG_ASSET_CATEGORIES = ("Sets", "BGs", "Character/Rigs", "Props - 3D", "Props - 2D", "Light Rigs")
+CAMERA_FRAMING_OPTIONS = ("Wide", "Full", "Cowboy", "Medium", "MCU", "CU", "ECU")
+
+
+def _can_edit_layout_config(db, film_id, user_id):
+    """
+    True if any of:
+      - film crew for this film in the 'Layout Coordinator' group (the
+        actual assignable permission the design doc describes), or
+      - film crew for this film in an Admin (Films) role (permission_level
+        >= 3) -- per-film admin override, or
+      - holds a GLOBAL 'films'-section role at permission_level >= 2 in
+        user_groups (UPM, any *Coordinator, Admin (Films)) -- this is the
+        table session['roles']/session['permissions'] are actually built
+        from at login (see auth_utils.get_user_roles/get_user_permission_level),
+        and it's how roles like UPM are commonly granted app-wide rather
+        than per-film via film_crew. Checking only film_crew here missed
+        every user whose film access was granted this way.
+    Deliberately still short of "any >=2 coordinator" for the FILM_CREW
+    case specifically (Layout Coordinator must be its own grant there) --
+    only the global-role path treats UPM/Coordinator as sufficient, since
+    that's the existing app-wide convention for that table.
+    """
+    film_crew_row = db.execute("""
+        SELECT 1
+        FROM film_crew fc
+        JOIN groups g ON g.id = fc.group_id
+        WHERE fc.film_id = ? AND fc.user_id = ?
+          AND (g.name = 'Layout Coordinator' OR g.permission_level >= 3)
+        LIMIT 1
+    """, (film_id, user_id)).fetchone()
+    if film_crew_row is not None:
+        return True
+
+    global_row = db.execute("""
+        SELECT 1
+        FROM user_groups ug
+        JOIN groups g ON g.id = ug.group_id
+        WHERE ug.user_id = ? AND g.section = 'films' AND g.permission_level >= 2
+        LIMIT 1
+    """, (user_id,)).fetchone()
+    return global_row is not None
+
+
+def _layout_step_id(db, film_step_id):
+    row = db.execute(
+        "SELECT id FROM steps WHERE parent_id = ? AND name = 'Layout'",
+        (film_step_id,)
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def _asset_stage_labels(db, asset_ids):
+    """
+    {asset_id: "highest stage reached" label} for the asset picker, e.g.
+    "Shot Ready" or "Texture/Surface Approved". Computed from
+    asset_step_assignments/steps directly (status text), not step_locks --
+    Shot Ready has no FB pair of its own (its own node IS the completion
+    marker), so this can't be expressed purely as "highest locked
+    step_locks row" the way MOD/TEX/RIG gating is.
+    """
+    if not asset_ids:
+        return {}
+
+    placeholders = ",".join("?" * len(asset_ids))
+    rows = db.execute(f"""
+        SELECT asa.asset_id, s.name AS step_name, s.order_num, asa.status
+        FROM asset_step_assignments asa
+        JOIN steps s ON s.id = asa.step_id
+        WHERE asa.asset_id IN ({placeholders})
+        ORDER BY s.order_num ASC
+    """, asset_ids).fetchall()
+
+    by_asset = {}
+    for row in rows:
+        by_asset.setdefault(row["asset_id"], []).append(row)
+
+    labels = {}
+    for asset_id, steps in by_asset.items():
+        shot_ready = next((r for r in steps if r["step_name"] == "Shot Ready"), None)
+        if shot_ready and shot_ready["status"] == "Shot Ready":
+            labels[asset_id] = "Shot Ready"
+            continue
+
+        fb_approved = [r for r in steps if r["step_name"].startswith("FB ") and r["status"] == "Approved"]
+        if fb_approved:
+            highest = max(fb_approved, key=lambda r: r["order_num"])
+            labels[asset_id] = f"{highest['step_name'][3:]} Approved"
+            continue
+
+        in_progress = next(
+            (r for r in steps if not r["step_name"].startswith("FB ") and r["step_name"] != "Shot Ready"),
+            None
+        )
+        labels[asset_id] = in_progress["step_name"] if in_progress else "Not Started"
+
+    return labels
+
+
+@films_bp.route("/<int:film_id>/scenes/<int:scene_id>/layout-config", methods=["GET"])
+@login_required
+def edit_layout_config(film_id, scene_id):
+    db = get_db()
+
+    film = db.execute("SELECT * FROM films WHERE id = ?", (film_id,)).fetchone()
+    if not film:
+        return "Film not found", 404
+
+    scene = db.execute(
+        "SELECT * FROM scenes WHERE id = ? AND film_id = ?", (scene_id, film_id)
+    ).fetchone()
+    if not scene:
+        return "Scene not found", 404
+
+    if not _can_edit_layout_config(db, film_id, session["user_id"]):
+        return render_template(
+            "error_popup.html",
+            message="Forbidden: Layout Coordinator access required for this film",
+            level="error"
+        ), 403
+
+    layout_step_id = _layout_step_id(db, film["step_id"])
+    if not layout_step_id:
+        return "This film's workflow has no 'Layout' step", 400
+
+    scene_lock = db.execute("""
+        SELECT locked FROM step_locks
+        WHERE entity_type = 'scene_step' AND entity_id = ? AND step_id = ?
+    """, (scene_id, layout_step_id)).fetchone()
+    scene_locked = bool(scene_lock["locked"]) if scene_lock else False
+
+    # Available assets for this film, grouped by category, for the picker.
+    available = db.execute("""
+        SELECT id, name, category FROM assets
+        WHERE film_id = ? AND category IN ({})
+        ORDER BY category, name
+    """.format(",".join("?" * len(LAYOUT_CONFIG_ASSET_CATEGORIES))),
+        (film_id, *LAYOUT_CONFIG_ASSET_CATEGORIES)).fetchall()
+
+    stage_labels = _asset_stage_labels(db, [row["id"] for row in available])
+
+    assets_by_category = {cat: [] for cat in LAYOUT_CONFIG_ASSET_CATEGORIES}
+    for row in available:
+        assets_by_category.setdefault(row["category"], []).append(
+            {"id": row["id"], "name": row["name"], "stage_label": stage_labels.get(row["id"], "Not Started")}
+        )
+
+    # Currently-assigned assets for this scene (asset_type mirrors the
+    # asset's own category at assignment time -- see save_scene_assets()).
+    assigned = db.execute("""
+        SELECT sa.asset_id, sa.asset_type, a.name
+        FROM scene_assets sa
+        JOIN assets a ON a.id = sa.asset_id
+        WHERE sa.scene_id = ?
+    """, (scene_id,)).fetchall()
+
+    assigned_ids_by_category = {cat: [] for cat in LAYOUT_CONFIG_ASSET_CATEGORIES}
+    for row in assigned:
+        assigned_ids_by_category.setdefault(row["asset_type"], []).append(row["asset_id"])
+
+    # Shot-level Camera Framing rows -- only meaningful once shots exist.
+    # Per the corrected pipeline sequence, shots are meant to exist only
+    # after scene Layout is approved; this route doesn't enforce that
+    # itself (shot creation is out of scope for this deliverable -- see
+    # PR notes), it just shows whatever shots already exist under this
+    # scene, if any.
+    shots = db.execute("""
+        SELECT sh.id, sh.shot_number, sh.camera_framing,
+               sl.locked AS layout_locked
+        FROM shots sh
+        LEFT JOIN step_locks sl
+          ON sl.entity_type = 'shot_step' AND sl.entity_id = sh.id AND sl.step_id = ?
+        WHERE sh.scene_id = ?
+        ORDER BY sh.shot_number
+    """, (layout_step_id, scene_id)).fetchall()
+
+    return render_template(
+        "films/edit_layout_config.html",
+        film=film,
+        scene=scene,
+        scene_locked=scene_locked,
+        asset_categories=LAYOUT_CONFIG_ASSET_CATEGORIES,
+        assets_by_category=assets_by_category,
+        assigned_ids_by_category=assigned_ids_by_category,
+        camera_framing_options=CAMERA_FRAMING_OPTIONS,
+        shots=[dict(s) for s in shots],
+    )
+
+
+@films_bp.route("/<int:film_id>/scenes/<int:scene_id>/layout-config/assets", methods=["POST"])
+@login_required
+def save_scene_layout_assets(film_id, scene_id):
+    db = get_db()
+
+    scene = db.execute(
+        "SELECT * FROM scenes WHERE id = ? AND film_id = ?", (scene_id, film_id)
+    ).fetchone()
+    if not scene:
+        return jsonify({"error": "Scene not found"}), 404
+
+    if not _can_edit_layout_config(db, film_id, session["user_id"]):
+        return jsonify({"error": "Forbidden: Layout Coordinator access required"}), 403
+
+    film = db.execute("SELECT step_id FROM films WHERE id = ?", (film_id,)).fetchone()
+    layout_step_id = _layout_step_id(db, film["step_id"]) if film else None
+    if not layout_step_id:
+        return jsonify({"error": "This film's workflow has no 'Layout' step"}), 400
+
+    scene_lock = db.execute("""
+        SELECT locked FROM step_locks
+        WHERE entity_type = 'scene_step' AND entity_id = ? AND step_id = ?
+    """, (scene_id, layout_step_id)).fetchone()
+    if scene_lock and scene_lock["locked"]:
+        return jsonify({"error": "Scene Layout is already approved/done — asset assignments are locked and cannot be edited"}), 409
+
+    data = request.get_json(silent=True) or {}
+    selections = data.get("assets", {})  # {category: [asset_id, ...]}
+
+    if not isinstance(selections, dict):
+        return jsonify({"error": "Expected 'assets' to be an object of category -> [asset_id]"}), 400
+
+    db.execute("DELETE FROM scene_assets WHERE scene_id = ?", (scene_id,))
+    for category, asset_ids in selections.items():
+        if category not in LAYOUT_CONFIG_ASSET_CATEGORIES:
+            continue
+        for asset_id in asset_ids or []:
+            db.execute(
+                "INSERT INTO scene_assets (scene_id, asset_id, asset_type) VALUES (?, ?, ?)",
+                (scene_id, asset_id, category)
+            )
+    db.commit()
+
+    return jsonify({"success": True})
+
+
+@films_bp.route("/<int:film_id>/scenes/<int:scene_id>/layout-config/shots/<int:shot_id>/camera-framing", methods=["POST"])
+@login_required
+def save_shot_camera_framing(film_id, scene_id, shot_id):
+    db = get_db()
+
+    shot = db.execute(
+        "SELECT sh.id FROM shots sh JOIN scenes sc ON sc.id = sh.scene_id "
+        "WHERE sh.id = ? AND sh.scene_id = ? AND sc.film_id = ?",
+        (shot_id, scene_id, film_id)
+    ).fetchone()
+    if not shot:
+        return jsonify({"error": "Shot not found"}), 404
+
+    if not _can_edit_layout_config(db, film_id, session["user_id"]):
+        return jsonify({"error": "Forbidden: Layout Coordinator access required"}), 403
+
+    film = db.execute("SELECT step_id FROM films WHERE id = ?", (film_id,)).fetchone()
+    layout_step_id = _layout_step_id(db, film["step_id"]) if film else None
+    if not layout_step_id:
+        return jsonify({"error": "This film's workflow has no 'Layout' step"}), 400
+
+    shot_lock = db.execute("""
+        SELECT locked FROM step_locks
+        WHERE entity_type = 'shot_step' AND entity_id = ? AND step_id = ?
+    """, (shot_id, layout_step_id)).fetchone()
+    if shot_lock and shot_lock["locked"]:
+        return jsonify({"error": "This shot's Layout is already approved — Camera Framing is locked and cannot be edited"}), 409
+
+    data = request.get_json(silent=True) or {}
+    framing = data.get("camera_framing")
+    if framing not in CAMERA_FRAMING_OPTIONS:
+        return jsonify({"error": f"camera_framing must be one of {', '.join(CAMERA_FRAMING_OPTIONS)}"}), 400
+
+    db.execute("UPDATE shots SET camera_framing = ? WHERE id = ?", (framing, shot_id))
+    db.commit()
+
+    return jsonify({"success": True, "shot_id": shot_id, "camera_framing": framing})
+
+
+@films_bp.route("/<int:film_id>/scenes/<int:scene_id>/layout-config/unlock", methods=["POST"])
+@login_required
+def unlock_scene_layout_config(film_id, scene_id):
+    """
+    Reopens the scene-level asset config for editing. This flips the SAME
+    step_locks row (entity_type='scene_step', step=Layout) that
+    scene_layout_complete() sets in capstone_routes.py -- there's no
+    separate "config lock" to invent, the asset picker and the
+    scene_layout_done gate (which decides whether shot-level Layout can be
+    created) are one and the same lock by design. So unlocking here also
+    un-marks "scene Layout done": intentional per explicit product
+    decision to allow this, not an oversight -- flagged to the caller via
+    "shots_exist" in the response rather than blocked, since shots that
+    already copied-in the scene Layout are NOT retroactively affected
+    (their files are independent copies, see CapstoneLayout.run_shot()),
+    only NEW shot-Layout creation and further scene asset edits are.
+    """
+    db = get_db()
+
+    scene = db.execute(
+        "SELECT * FROM scenes WHERE id = ? AND film_id = ?", (scene_id, film_id)
+    ).fetchone()
+    if not scene:
+        return jsonify({"error": "Scene not found"}), 404
+
+    if not _can_edit_layout_config(db, film_id, session["user_id"]):
+        return jsonify({"error": "Forbidden: Layout Coordinator access required"}), 403
+
+    film = db.execute("SELECT step_id FROM films WHERE id = ?", (film_id,)).fetchone()
+    layout_step_id = _layout_step_id(db, film["step_id"]) if film else None
+    if not layout_step_id:
+        return jsonify({"error": "This film's workflow has no 'Layout' step"}), 400
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    db.execute("""
+        UPDATE step_locks
+        SET locked = 0, unlocked_by = ?, unlocked_at = ?
+        WHERE entity_type = 'scene_step' AND entity_id = ? AND step_id = ?
+    """, (session["user_id"], now, scene_id, layout_step_id))
+    db.commit()
+
+    shots_exist = db.execute(
+        "SELECT 1 FROM shots WHERE scene_id = ? LIMIT 1", (scene_id,)
+    ).fetchone() is not None
+
+    return jsonify({"success": True, "scene_id": scene_id, "shots_exist": shots_exist})
+
+
+@films_bp.route("/<int:film_id>/scenes/<int:scene_id>/layout-config/shots/<int:shot_id>/unlock", methods=["POST"])
+@login_required
+def unlock_shot_camera_framing(film_id, scene_id, shot_id):
+    """
+    Reopens one shot's Camera Framing for editing. Same caveat as
+    unlock_scene_layout_config(): this flips the SAME step_locks row
+    (entity_type='shot_step', step=Layout) that shot_layout_approve() sets
+    in capstone_routes.py, so it also un-marks that shot's Layout as
+    approved -- which in turn means shot_animation_context() will report
+    layout_locked=False again. That does NOT retroactively touch an
+    Animation file that already exists (CapstoneAnimation.run_shot() only
+    checks layout_locked when there's no existing Animation file to open
+    yet), it only blocks a brand-new Animation file from being created
+    until Layout is re-approved. Allowed anyway per explicit product
+    decision -- flagged in the response, not blocked.
+    """
+    db = get_db()
+
+    shot = db.execute(
+        "SELECT sh.id FROM shots sh JOIN scenes sc ON sc.id = sh.scene_id "
+        "WHERE sh.id = ? AND sh.scene_id = ? AND sc.film_id = ?",
+        (shot_id, scene_id, film_id)
+    ).fetchone()
+    if not shot:
+        return jsonify({"error": "Shot not found"}), 404
+
+    if not _can_edit_layout_config(db, film_id, session["user_id"]):
+        return jsonify({"error": "Forbidden: Layout Coordinator access required"}), 403
+
+    film = db.execute("SELECT step_id FROM films WHERE id = ?", (film_id,)).fetchone()
+    layout_step_id = _layout_step_id(db, film["step_id"]) if film else None
+    if not layout_step_id:
+        return jsonify({"error": "This film's workflow has no 'Layout' step"}), 400
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    db.execute("""
+        UPDATE step_locks
+        SET locked = 0, unlocked_by = ?, unlocked_at = ?
+        WHERE entity_type = 'shot_step' AND entity_id = ? AND step_id = ?
+    """, (session["user_id"], now, shot_id, layout_step_id))
+    db.commit()
+
+    animation_step_id_row = db.execute(
+        "SELECT id FROM steps WHERE parent_id = ? AND name = 'Animation'", (film["step_id"],)
+    ).fetchone()
+    animation_exists = False
+    if animation_step_id_row:
+        animation_exists = db.execute("""
+            SELECT 1 FROM step_locks
+            WHERE entity_type = 'shot_step' AND entity_id = ? AND step_id = ?
+        """, (shot_id, animation_step_id_row["id"])).fetchone() is not None
+
+    return jsonify({"success": True, "shot_id": shot_id, "animation_started": animation_exists})
+
 
 @films_bp.route("/api/scene_status_summary/<int:scene_id>/<int:step_id>", methods=["GET"])
 def scene_status_summary(scene_id, step_id):
@@ -2009,50 +2412,6 @@ def view_shots_route(scene_id):
     steps = db.execute("SELECT id, name FROM steps").fetchall()
     steps = [dict(row) for row in steps]
 
-    # Capstone lock state (Phase 5) -- scene_layout_done gates whether
-    # "Open Layout in Maya" can create a shot Layout file at all; each
-    # shot's own lock row per step drives that step's "Approve" button and
-    # gates the next step (Layout locked -> Animation reachable, etc).
-    def _film_step_id(name):
-        row = db.execute(
-            "SELECT id FROM steps WHERE parent_id = ? AND name = ?",
-            (film["step_id"], name)
-        ).fetchone()
-        return row["id"] if row else None
-
-    def _shot_locks_for_step(step_id):
-        if not step_id:
-            return {}
-        return {
-            row["shot_id"]: bool(row["locked"])
-            for row in db.execute("""
-                SELECT entity_id AS shot_id, locked
-                FROM step_locks
-                WHERE entity_type = 'shot_step' AND step_id = ?
-            """, (step_id,)).fetchall()
-        }
-
-    layout_step_id = _film_step_id("Layout")
-    animation_step_id = _film_step_id("Animation")
-    lighting_step_id = _film_step_id("Lighting")
-
-    scene_layout_done = False
-    if layout_step_id:
-        scene_lock = db.execute("""
-            SELECT locked FROM step_locks
-            WHERE entity_type = 'scene_step' AND entity_id = ? AND step_id = ?
-        """, (scene_id, layout_step_id)).fetchone()
-        scene_layout_done = bool(scene_lock["locked"]) if scene_lock else False
-
-    shot_layout_locks = _shot_locks_for_step(layout_step_id)
-    shot_animation_locks = _shot_locks_for_step(animation_step_id)
-    shot_lighting_locks = _shot_locks_for_step(lighting_step_id)
-
-    for shot in shots:
-        shot["layout_locked"] = shot_layout_locks.get(shot["id"], False)
-        shot["animation_locked"] = shot_animation_locks.get(shot["id"], False)
-        shot["lighting_locked"] = shot_lighting_locks.get(shot["id"], False)
-
     # Render the template
     return render_template(
         "films/view_shots.html",
@@ -2063,8 +2422,7 @@ def view_shots_route(scene_id):
         steps=list(steps_map.values()),
         crew=crew,
         visible_step_ids=set(map(int, request.args.getlist("visible_steps"))),
-        active_page="scenes",
-        scene_layout_done=scene_layout_done
+        active_page="scenes"
     )
 
 @films_bp.route("/shots/edit", methods=["POST"])
@@ -2187,6 +2545,56 @@ def update_shot_status():
         WHERE shot_id = ? AND step_id = ?
     """, (new_status, shot_id, step_id))
 
+    # FB Animation/FB Blocking reaching Approved locks the sibling
+    # production step (step_locks, entity_type='shot_step') -- this is what
+    # CapstoneLighting.py's animation_locked gate and CapstoneAnimation.py's
+    # resolve_current_step() actually read, and replaces the old dedicated
+    # "Approve Animation"/"Approve Blocking" buttons now that approval
+    # happens through this same per-shot status dropdown instead. Blocking
+    # Plus/Polish have no FB pair -- they're self-locked by the artist via
+    # GAA Save, not coordinator-graded here. FB Lighting isn't included --
+    # Lighting is the last file-versioned step, there's nothing after it to
+    # unlock (Comp is out of scope).
+    SHOT_FB_UNLOCKS_STEP = {"FB Animation": "Animation", "FB Blocking": "Blocking"}
+    if new_status == "Approved":
+        fb_step_row = db.execute("SELECT name, parent_id FROM steps WHERE id = ?", (step_id,)).fetchone()
+        production_step_name = SHOT_FB_UNLOCKS_STEP.get(fb_step_row["name"]) if fb_step_row else None
+
+        if production_step_name:
+            production_step = db.execute(
+                "SELECT id FROM steps WHERE parent_id = ? AND name = ?",
+                (fb_step_row["parent_id"], production_step_name)
+            ).fetchone()
+
+            # Animation is additionally gated on Polish having been locked
+            # (the artist's own Blocking->Blocking Plus->Polish submission
+            # via GAA Save) -- approving FB Animation before that shouldn't
+            # silently lock Animation on an unfinished shot.
+            if production_step and production_step_name == "Animation":
+                polish_step = db.execute(
+                    "SELECT id FROM steps WHERE parent_id = ? AND name = 'Polish'",
+                    (fb_step_row["parent_id"],)
+                ).fetchone()
+                if polish_step:
+                    polish_lock = db.execute("""
+                        SELECT locked FROM step_locks
+                        WHERE entity_type = 'shot_step' AND entity_id = ? AND step_id = ?
+                    """, (shot_id, polish_step["id"])).fetchone()
+                    if not (polish_lock and polish_lock["locked"]):
+                        return jsonify({
+                            "success": False,
+                            "error": "This shot's Polish version hasn't been submitted yet -- Animation can't be approved until it is."
+                        }), 400
+
+            if production_step:
+                now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                approver_id = session.get("user_id")
+                db.execute("""
+                    INSERT INTO step_locks (entity_type, entity_id, step_id, locked, locked_by, locked_at)
+                    VALUES ('shot_step', ?, ?, 1, ?, ?)
+                    ON CONFLICT(entity_type, entity_id, step_id)
+                    DO UPDATE SET locked = 1, locked_by = excluded.locked_by, locked_at = excluded.locked_at
+                """, (shot_id, production_step["id"], approver_id, now))
 
     db.commit()
 
@@ -2533,18 +2941,17 @@ def view_assets(film_id):
         print(f"Error fetching assets for film {film_id}: {e}")
         return "Error loading assets", 500
 
-@films_bp.route("/films/assets/sync-disk/<int:film_id>", methods=["POST"])
-def sync_asset_disk(film_id):
-
-    db = get_db()
-
-    film = db.execute(
-        "SELECT name FROM films WHERE id = ?",
-        (film_id,)
-    ).fetchone()
-
+def _sync_assets_from_disk(db, film_id):
+    """
+    Core "Sync from Disk" logic -- shared by the sync_asset_disk() button
+    route and add_asset(), so a newly created asset gets its file_path
+    resolved the same way a manual sync would, without needing a separate
+    click. Returns the number of assets updated. Caller is responsible for
+    db.commit().
+    """
+    film = db.execute("SELECT name FROM films WHERE id = ?", (film_id,)).fetchone()
     if not film:
-        return jsonify({"error": "Film not found"}), 404
+        return None
 
     film_name = film["name"]
 
@@ -2555,9 +2962,7 @@ def sync_asset_disk(film_id):
     """, (film_id,)).fetchall()
 
     updated = 0
-
     for asset in assets:
-
         resolved_path = find_matching_asset_file(
             film_name,
             asset["category"],
@@ -2572,6 +2977,17 @@ def sync_asset_disk(film_id):
                 WHERE id = ?
             """, (resolved_path, asset["id"]))
             updated += 1
+
+    return updated
+
+
+@films_bp.route("/films/assets/sync-disk/<int:film_id>", methods=["POST"])
+def sync_asset_disk(film_id):
+    db = get_db()
+
+    updated = _sync_assets_from_disk(db, film_id)
+    if updated is None:
+        return jsonify({"error": "Film not found"}), 404
 
     db.commit()
 
@@ -2749,17 +3165,13 @@ def add_asset(film_id):
                 except OSError as e:
                     print(f"⚠️ Could not create asset folder for '{name}' ({category}): {e}")
 
-            resolved_path = find_matching_asset_file(
-                film_name,
-                category,
-                name
-            )
-
-            db.execute("""
-                UPDATE assets
-                SET file_path = ?
-                WHERE id = ?
-            """, (resolved_path, asset_id))
+            # Sync from Disk for the whole film, not just this new asset --
+            # same helper the "Sync Disk" button calls, so adding an asset
+            # does exactly what that button does automatically (this new
+            # asset's folder was just created and is empty, so it'll
+            # resolve to nothing yet, but every other asset in the film
+            # gets re-checked too).
+            _sync_assets_from_disk(db, film_id)
 
             # Step 3: Load default schedule for this category
             step_defs = default_timeline["Assets"].get(category, [])
@@ -2903,6 +3315,20 @@ def asset_status_summary(asset_id, step_id):
         } for row in results
     ])
 
+# FB step -> the production step it unlocks. Mirrors
+# dashboard_routes.py's ASSET_FB_UNLOCKS_STEP -- duplicated rather than
+# cross-imported between route blueprints (consistent with the rest of
+# this codebase's per-blueprint split), since this is the actual route
+# the film Assets page hits, and dashboard_routes.py's copy only covers
+# the personal To-Do Assets widget. FB Rigging is deliberately excluded
+# here too -- Rigging is the last file-versioned step, and Shot Ready is
+# already a separate coordinator action elsewhere.
+ASSET_FB_UNLOCKS_STEP = {
+    "FB Modeling": "Modeling",
+    "FB Texture/Surface": "Texture/Surface",
+}
+
+
 @films_bp.route("/assets/<int:asset_id>/steps/<int:step_id>/update", methods=["POST"])
 def update_asset_step(asset_id, step_id):
     db = get_db()
@@ -2936,9 +3362,37 @@ def update_asset_step(asset_id, step_id):
             WHERE asset_id = ? AND step_id = ?
         """, (node_id, status_name, asset_id, step_id))
 
+        # STEP 2b: FB Modeling/FB Texture-Surface reaching Approved unlocks
+        # the next production step (step_locks, entity_type='asset_step') --
+        # the same table Assets.py's resolve_current_step() and the
+        # dashboard's is_active_step gating both read. See
+        # ASSET_FB_UNLOCKS_STEP above for why FB Rigging isn't included.
+        if status_name == "Approved":
+            fb_step_row = db.execute("SELECT name FROM steps WHERE id = ?", (step_id,)).fetchone()
+            production_step_name = ASSET_FB_UNLOCKS_STEP.get(fb_step_row["name"]) if fb_step_row else None
+
+            if production_step_name:
+                production_step = db.execute("""
+                    SELECT s.id
+                    FROM asset_step_assignments asa
+                    JOIN steps s ON s.id = asa.step_id
+                    WHERE asa.asset_id = ? AND s.name = ?
+                """, (asset_id, production_step_name)).fetchone()
+
+                if production_step:
+                    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    approver_id = session.get("user_id")
+                    db.execute("""
+                        INSERT INTO step_locks (entity_type, entity_id, step_id, locked, locked_by, locked_at)
+                        VALUES ('asset_step', ?, ?, 1, ?, ?)
+                        ON CONFLICT(entity_type, entity_id, step_id)
+                        DO UPDATE SET locked = 1, locked_by = excluded.locked_by, locked_at = excluded.locked_at
+                    """, (asset_id, production_step["id"], approver_id, now))
+
         # STEP 3: Apply recursive crossflow updates
         visited = set()
         queue = [(node_id, step_id)]
+        updated_steps = []
 
         while queue:
             current_node_id, current_step_id = queue.pop(0)
@@ -2957,8 +3411,9 @@ def update_asset_step(asset_id, step_id):
                 to_step = link["to_flow_id"]
                 child_node_id = link["child_node_id"]
 
-                child_status = db.execute("SELECT name FROM nodes WHERE id = ?", (child_node_id,)).fetchone()
+                child_status = db.execute("SELECT name, color FROM nodes WHERE id = ?", (child_node_id,)).fetchone()
                 child_status_name = child_status["name"] if child_status else None
+                child_color = child_status["color"] if child_status else "#ffffff"
 
                 existing = db.execute("""
                     SELECT 1 FROM asset_step_assignments
@@ -2977,10 +3432,26 @@ def update_asset_step(asset_id, step_id):
                         VALUES (?, ?, ?, ?, datetime('now'))
                     """, (asset_id, to_step, child_node_id, child_status_name))
 
+                updated_steps.append({
+                    "step_id": to_step,
+                    "node_id": child_node_id,
+                    "status": child_status_name,
+                    "color": child_color or "#ffffff"
+                })
+
                 queue.append((child_node_id, to_step))
 
         db.commit()
-        return jsonify({"success": True, "node_id": node_id})
+
+        node_color_row = db.execute("SELECT color FROM nodes WHERE id = ?", (node_id,)).fetchone()
+        node_color = (node_color_row["color"] if node_color_row else None) or "#ffffff"
+
+        return jsonify({
+            "success": True,
+            "node_id": node_id,
+            "color": node_color,
+            "updated_steps": updated_steps
+        })
 
     except Exception as e:
         db.rollback()
@@ -3690,7 +4161,7 @@ def get_dashboard_data():
     conn = get_db()
 
     films = conn.execute("""
-        SELECT f.id, f.name
+        SELECT DISTINCT f.id, f.name, f.step_id AS film_step_id
         FROM films f
         JOIN film_crew fc ON fc.film_id = f.id
         WHERE fc.user_id = ?
@@ -3701,6 +4172,28 @@ def get_dashboard_data():
     for film in films:
         shots = []
         assignment_lookup = {}
+
+        # Which scenes in this film have an approved (locked) scene
+        # Layout -- gates whether the shot-level Layout OPEN button below
+        # is clickable, same "scene_layout_done" check CapstoneLayout.py's
+        # run_shot() itself enforces server-side; this is just what makes
+        # the dashboard button reflect that truthfully instead of always
+        # showing enabled.
+        done_scene_ids = set()
+        layout_step_row = conn.execute(
+            "SELECT id FROM steps WHERE parent_id = ? AND name = 'Layout'",
+            (film["film_step_id"],)
+        ).fetchone()
+        if layout_step_row:
+            done_scene_ids = {
+                row["entity_id"] for row in conn.execute("""
+                    SELECT sl.entity_id
+                    FROM step_locks sl
+                    JOIN scenes sc ON sc.id = sl.entity_id
+                    WHERE sl.entity_type = 'scene_step' AND sl.step_id = ?
+                      AND sl.locked = 1 AND sc.film_id = ?
+                """, (layout_step_row["id"], film["id"])).fetchall()
+            }
 
         # Get scene-level assignments (e.g., thumbnails)
         scene_steps = conn.execute("""
@@ -3790,6 +4283,7 @@ def get_dashboard_data():
                     "shot_number": assign.get("shot_number", "-") if shot_id is not None else "-",
                     "scene_number": assign["scene_number"],
                     "scene_id": scene_id,
+                    "scene_layout_done": scene_id in done_scene_ids,
                     "steps": [step_data]
                 }
                 shots.append(shot_entry)

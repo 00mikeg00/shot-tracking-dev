@@ -137,6 +137,13 @@ def delete_film(film_id):
             )
         """, (film_id,))
 
+        db.execute("""
+            DELETE FROM scene_assets
+            WHERE scene_id IN (
+                SELECT id FROM scenes WHERE film_id = ?
+            )
+        """, (film_id,))
+
         # Remove scenes
         db.execute("DELETE FROM scenes WHERE film_id = ?", (film_id,))
 

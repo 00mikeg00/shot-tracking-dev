@@ -55,7 +55,7 @@ ASSIGNMENT_STEP_NAME_MAP = {
     "BP": "Blocking Plus",
     "P": "Polish"
 }
-FILM_STEP_CODES = ["LAY", "ANIM", "LIT"]
+FILM_STEP_CODES = ["LAY", "ANIM", "LGT"]
 
 
 # ─────────────────────────────────────────────

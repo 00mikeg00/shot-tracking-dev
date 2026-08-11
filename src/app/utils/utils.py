@@ -156,6 +156,13 @@ def find_matching_asset_file(film_title, category, asset_name):
     NAME[_anything]_v###.mb
     inside:
     Assets/<Category>/<Asset Name>/
+
+    Proxy files (_PROXY_-tagged) are excluded -- Proxy is a separate,
+    independent lineage from Modeling/Texture-Surface/Rigging (see
+    Assets.py's find_latest_asset_version(), which mirrors this same
+    exclusion on the Maya side). Without it, a brand-new asset with only a
+    Proxy file would get its official production file_path resolved to
+    the proxy instead of staying unset until real production work exists.
     """
 
     if not asset_name:
@@ -188,6 +195,8 @@ def find_matching_asset_file(film_title, category, asset_name):
     best_file = None
 
     for filename in os.listdir(asset_dir):
+        if "_PROXY_" in filename.upper():
+            continue
         match = pattern.match(filename)
         if not match:
             continue

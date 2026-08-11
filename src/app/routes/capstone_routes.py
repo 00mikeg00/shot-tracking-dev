@@ -12,7 +12,10 @@ from app.database.db import get_db
 
 capstone_bp = Blueprint("capstone", __name__, url_prefix="/classes/api/launcher/capstone")
 
-SCENE_ASSET_CATEGORIES = ("Sets", "Character/Rigs")
+# Matches films_routes.py's LAYOUT_CONFIG_ASSET_CATEGORIES -- the Edit
+# Layout Config editor lets a coordinator assign all six of these per
+# scene (scene_assets table), not just Sets/Character-Rigs.
+SCENE_ASSET_CATEGORIES = ("Sets", "BGs", "Character/Rigs", "Props - 3D", "Props - 2D", "Light Rigs")
 
 
 def _resolve_scene(db, scene_id):
@@ -38,7 +41,7 @@ def _resolve_step_by_name(db, film_step_id, step_name):
 
 def _resolve_shot(db, shot_id):
     return db.execute("""
-        SELECT sh.id AS shot_id, sh.shot_number,
+        SELECT sh.id AS shot_id, sh.shot_number, sh.camera_framing,
                sc.id AS scene_id, sc.scene_number, sc.film_id,
                f.name AS film_name, f.step_id AS film_step_id
         FROM shots sh
@@ -193,12 +196,18 @@ def scene_layout_context():
         WHERE sl.entity_type = 'scene_step' AND sl.entity_id = ? AND sl.step_id = ?
     """, (scene_id, layout_step["id"])).fetchone()
 
+    # Scoped to THIS scene via scene_assets (populated by the Edit Layout
+    # Config editor, films_routes.py:save_scene_layout_assets) -- not every
+    # matching-category asset in the whole film. That was the pre-editor
+    # placeholder query; left unscoped it silently ignored whatever the
+    # coordinator actually picked.
     assets = db.execute(f"""
-        SELECT name, category, file_path
-        FROM assets
-        WHERE film_id = ? AND category IN ({','.join('?' * len(SCENE_ASSET_CATEGORIES))})
-        ORDER BY category, name
-    """, (scene["film_id"], *SCENE_ASSET_CATEGORIES)).fetchall()
+        SELECT a.name, sa.asset_type AS category, a.file_path
+        FROM scene_assets sa
+        JOIN assets a ON a.id = sa.asset_id
+        WHERE sa.scene_id = ? AND sa.asset_type IN ({','.join('?' * len(SCENE_ASSET_CATEGORIES))})
+        ORDER BY sa.asset_type, a.name
+    """, (scene_id, *SCENE_ASSET_CATEGORIES)).fetchall()
 
     assets_by_category = {cat: [] for cat in SCENE_ASSET_CATEGORIES}
     for row in assets:
@@ -318,6 +327,7 @@ def shot_layout_context():
         "film_name": shot["film_name"],
         "layout_step_id": layout_step["id"],
         "scene_layout_done": scene_layout_done,
+        "camera_framing": shot["camera_framing"],
         "locked": bool(shot_lock["locked"]) if shot_lock else False,
         "locked_by": shot_lock["locked_by"] if shot_lock else None,
         "locked_at": shot_lock["locked_at"] if shot_lock else None,
@@ -360,6 +370,208 @@ def shot_layout_approve():
     })
 
 
+@capstone_bp.route("/shot-blocking/approve", methods=["POST"])
+def shot_blocking_approve():
+    """
+    Instructor/coordinator approves one shot's Blocking. Unlike Blocking
+    Plus/Polish (self-locked by the artist via GAA Save -- see
+    /shot-animation-substep/lock), Blocking can ONLY be locked through this
+    coordinator-gated route: it's the review gate between the artist's
+    first pass and Blocking Plus, mirroring Layout's instructor approval
+    rather than the self-service BP/Polish flow. See _approve_shot_step().
+    """
+    data = request.get_json(silent=True) or {}
+    shot_id = data.get("shot_id")
+    login_name = (data.get("login_name") or "").strip()
+
+    if not shot_id or not login_name:
+        return jsonify({"error": "Missing shot_id or login_name"}), 400
+
+    db = get_db()
+
+    shot = _resolve_shot(db, shot_id)
+    if not shot:
+        return jsonify({"error": f"shot_id {shot_id} not found"}), 404
+
+    user = _resolve_coordinator(db, shot["film_id"], login_name)
+    if not user:
+        return jsonify({"error": f"'{login_name}' does not have approval rights for this film"}), 403
+
+    result, error = _approve_shot_step(db, shot, "Blocking", user)
+    if error:
+        return error
+
+    return jsonify({
+        "success": True,
+        "timeline_warning": _timeline_warning(db, shot["film_id"], "Blocking"),
+        **result
+    })
+
+
+@capstone_bp.route("/shot-animation-substep/status", methods=["GET"])
+def shot_animation_substep_status():
+    """
+    Live lock state for Blocking/Blocking Plus/Polish on one shot, same
+    shape as launcher_routes.py's asset_steps_status() so
+    CapstoneAnimation.py's resolve_current_step() (ported from
+    Assignments.py/Assets.py) works unmodified against it.
+    """
+    shot_id = request.args.get("shot_id", type=int)
+    if not shot_id:
+        return jsonify({"error": "Missing shot_id"}), 400
+
+    db = get_db()
+
+    shot = _resolve_shot(db, shot_id)
+    if not shot:
+        return jsonify({"error": f"shot_id {shot_id} not found"}), 404
+
+    rows = db.execute("""
+        SELECT
+            s.id AS step_id,
+            s.name AS step_name,
+            s.order_num,
+            s.short_code,
+            sl.locked,
+            locker.login_name AS locked_by,
+            sl.locked_at,
+            unlocker.login_name AS unlocked_by,
+            sl.unlocked_at
+        FROM steps s
+        LEFT JOIN step_locks sl
+            ON sl.entity_type = 'shot_step' AND sl.entity_id = ? AND sl.step_id = s.id
+        LEFT JOIN users locker ON locker.id = sl.locked_by
+        LEFT JOIN users unlocker ON unlocker.id = sl.unlocked_by
+        WHERE s.parent_id = ? AND s.name IN ('Blocking', 'Blocking Plus', 'Polish')
+        ORDER BY s.order_num ASC
+    """, (shot_id, shot["film_step_id"])).fetchall()
+
+    steps = [{
+        "step_id": row["step_id"],
+        "name": row["step_name"],
+        "short_code": row["short_code"],
+        "order_num": row["order_num"],
+        "locked": bool(row["locked"]),
+        "locked_by": row["locked_by"],
+        "locked_at": row["locked_at"],
+        "unlocked_by": row["unlocked_by"],
+        "unlocked_at": row["unlocked_at"],
+    } for row in rows]
+
+    return jsonify({"shot_id": shot_id, "steps": steps})
+
+
+def _resolve_animation_substep_owner(db, shot_id, step_name, login_name):
+    """
+    Ownership/permission check for self-service lock/unlock of Blocking
+    Plus/Polish. Deliberately excludes 'Blocking' -- that step can only be
+    locked via the coordinator-gated /shot-blocking/approve route, not
+    self-locked by the artist. Same film-crew-membership boundary as the
+    rest of capstone_routes.py's non-approval actions (_resolve_crew_member),
+    not restricted to whichever crew member is "assigned" to the shot --
+    shots have no per-shot owner column, same as scene-level Layout.
+    """
+    if step_name not in ("Blocking Plus", "Polish"):
+        return None, None, (jsonify({
+            "error": f"'{step_name}' can't be self-locked -- Blocking requires coordinator approval (see /shot-blocking/approve)."
+        }), 403)
+
+    shot = _resolve_shot(db, shot_id)
+    if not shot:
+        return None, None, (jsonify({"error": f"shot_id {shot_id} not found"}), 404)
+
+    user = _resolve_crew_member(db, shot["film_id"], login_name)
+    if not user:
+        return None, None, (jsonify({"error": f"'{login_name}' is not film crew for this film"}), 403)
+
+    step = _resolve_step_by_name(db, shot["film_step_id"], step_name)
+    if not step:
+        return None, None, (jsonify({"error": f"Step '{step_name}' not found for this film's workflow"}), 404)
+
+    return shot, user, step
+
+
+@capstone_bp.route("/shot-animation-substep/lock", methods=["POST"])
+def lock_shot_animation_substep():
+    """Self-lock for Blocking Plus/Polish, called by GAA Save's 'Lock this step' checkbox."""
+    data = request.get_json(silent=True) or {}
+    shot_id = data.get("shot_id")
+    step_name = (data.get("step_name") or "").strip()
+    login_name = (data.get("login_name") or "").strip()
+
+    if not shot_id or not step_name or not login_name:
+        return jsonify({"error": "Missing shot_id, step_name, or login_name"}), 400
+
+    db = get_db()
+
+    shot, user, step_or_error = _resolve_animation_substep_owner(db, shot_id, step_name, login_name)
+    if shot is None:
+        return step_or_error
+    step = step_or_error
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    db.execute("""
+        INSERT INTO step_locks (entity_type, entity_id, step_id, locked, locked_by, locked_at)
+        VALUES ('shot_step', ?, ?, 1, ?, ?)
+        ON CONFLICT(entity_type, entity_id, step_id)
+        DO UPDATE SET locked = 1, locked_by = excluded.locked_by, locked_at = excluded.locked_at
+    """, (shot_id, step["id"], user["id"], now))
+    db.execute("""
+        INSERT INTO shot_step_assignments (shot_id, step_id, status)
+        VALUES (?, ?, 'Submitted')
+        ON CONFLICT (shot_id, step_id) DO UPDATE SET status = 'Submitted'
+    """, (shot_id, step["id"]))
+    db.commit()
+
+    return jsonify({
+        "success": True,
+        "step_id": step["id"],
+        "step_name": step["name"],
+        "locked": True,
+        "locked_by": login_name,
+        "locked_at": now
+    })
+
+
+@capstone_bp.route("/shot-animation-substep/unlock", methods=["POST"])
+def unlock_shot_animation_substep():
+    """Self-unlock for Blocking Plus/Polish -- the artist can always unlock their own locked substep."""
+    data = request.get_json(silent=True) or {}
+    shot_id = data.get("shot_id")
+    step_name = (data.get("step_name") or "").strip()
+    login_name = (data.get("login_name") or "").strip()
+
+    if not shot_id or not step_name or not login_name:
+        return jsonify({"error": "Missing shot_id, step_name, or login_name"}), 400
+
+    db = get_db()
+
+    shot, user, step_or_error = _resolve_animation_substep_owner(db, shot_id, step_name, login_name)
+    if shot is None:
+        return step_or_error
+    step = step_or_error
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    db.execute("""
+        INSERT INTO step_locks (entity_type, entity_id, step_id, locked, unlocked_by, unlocked_at)
+        VALUES ('shot_step', ?, ?, 0, ?, ?)
+        ON CONFLICT(entity_type, entity_id, step_id)
+        DO UPDATE SET locked = 0, unlocked_by = excluded.unlocked_by, unlocked_at = excluded.unlocked_at
+    """, (shot_id, step["id"], user["id"], now))
+    db.commit()
+
+    return jsonify({
+        "success": True,
+        "step_id": step["id"],
+        "step_name": step["name"],
+        "locked": False,
+        "unlocked_by": login_name,
+        "unlocked_at": now
+    })
+
+
 @capstone_bp.route("/shot-animation/context", methods=["GET"])
 def shot_animation_context():
     shot_id = request.args.get("shot_id", type=int)
@@ -383,6 +595,17 @@ def shot_animation_context():
     if not layout_step or not animation_step:
         return jsonify({"error": "This film's workflow is missing 'Layout' or 'Animation'"}), 404
 
+    # Gate is the SCENE's Layout being marked done, not any per-shot Layout
+    # approval -- once true, every shot in the scene is Animation-ready at
+    # once. layout_locked (per-shot) is still returned for callers that
+    # haven't moved off it, but Assets.py/CapstoneAnimation.py's own gate
+    # check now reads scene_layout_done.
+    scene_lock = db.execute("""
+        SELECT locked FROM step_locks
+        WHERE entity_type = 'scene_step' AND entity_id = ? AND step_id = ?
+    """, (shot["scene_id"], layout_step["id"])).fetchone()
+    scene_layout_done = bool(scene_lock["locked"]) if scene_lock else False
+
     layout_lock = db.execute("""
         SELECT locked FROM step_locks
         WHERE entity_type = 'shot_step' AND entity_id = ? AND step_id = ?
@@ -396,6 +619,21 @@ def shot_animation_context():
         WHERE sl.entity_type = 'shot_step' AND sl.entity_id = ? AND sl.step_id = ?
     """, (shot_id, animation_step["id"])).fetchone()
 
+    # Character/Rigs assets configured for this shot's scene (Edit Layout
+    # Config editor, scene_assets table) -- Animation references the
+    # Shot-Ready version of each of these IN ADDITION to whatever the
+    # copied-in Layout already has (the Proxy). CapstoneAnimation.py
+    # resolves the actual Shot-Ready file itself from the asset name/film,
+    # same self-contained pattern as CapstoneLayout.py resolving Proxy --
+    # only the name is needed here, not a file_path.
+    character_rigs = db.execute("""
+        SELECT a.name
+        FROM scene_assets sa
+        JOIN assets a ON a.id = sa.asset_id
+        WHERE sa.scene_id = ? AND sa.asset_type = 'Character/Rigs'
+        ORDER BY a.name
+    """, (shot["scene_id"],)).fetchall()
+
     return jsonify({
         "shot_id": shot_id,
         "shot_number": shot["shot_number"],
@@ -404,7 +642,9 @@ def shot_animation_context():
         "film_id": shot["film_id"],
         "film_name": shot["film_name"],
         "animation_step_id": animation_step["id"],
+        "scene_layout_done": scene_layout_done,
         "layout_locked": layout_locked,
+        "character_rigs": [{"name": r["name"]} for r in character_rigs],
         "locked": bool(animation_lock["locked"]) if animation_lock else False,
         "locked_by": animation_lock["locked_by"] if animation_lock else None,
         "locked_at": animation_lock["locked_at"] if animation_lock else None,
@@ -435,6 +675,19 @@ def shot_animation_approve():
     user = _resolve_coordinator(db, shot["film_id"], login_name)
     if not user:
         return jsonify({"error": f"'{login_name}' does not have approval rights for this film"}), 403
+
+    # Polish is the artist's final Animation submission (Blocking -> Blocking
+    # Plus -> Polish, see /shot-animation-substep/*) -- require it locked
+    # before Animation can be approved, same idea as the scene_layout_done
+    # gate on Animation's own Maya-side start.
+    polish_step = _resolve_step_by_name(db, shot["film_step_id"], "Polish")
+    if polish_step:
+        polish_lock = db.execute("""
+            SELECT locked FROM step_locks
+            WHERE entity_type = 'shot_step' AND entity_id = ? AND step_id = ?
+        """, (shot_id, polish_step["id"])).fetchone()
+        if not (polish_lock and polish_lock["locked"]):
+            return jsonify({"error": "This shot's Polish version hasn't been submitted yet -- Animation can't be approved until it is."}), 400
 
     result, error = _approve_shot_step(db, shot, "Animation", user)
     if error:

@@ -140,6 +140,8 @@ def add_assignment():
     progress_step_ids = request.form.getlist("progress_step_ids")
     assign_option = data.get('assign_option', 'all')
     selected_students = request.form.getlist("selected_students")
+    frame_start = data.get('frame_start') or None
+    frame_end = data.get('frame_end') or None
 
     if not all([class_id, name, start_date, completion_date, parent_step_id, progress_step_ids]):
         context = get_assignment_form_data(class_id)
@@ -155,7 +157,9 @@ def add_assignment():
             "parent_step_id": parent_step_id,
             "progress_step_ids": progress_step_ids,
             "assign_option": assign_option,
-            "selected_students": selected_students
+            "selected_students": selected_students,
+            "frame_start": frame_start,
+            "frame_end": frame_end
         })
         return redirect(url_for("assignments.view_assignments", class_id=class_id, success=True))
 
@@ -198,8 +202,8 @@ def api_view_assignments(class_id):
 
     db = get_db()
     query = """
-        SELECT id, name, start_date, completion_date, progress_step_id, parent_step_id 
-        FROM assignments 
+        SELECT id, name, start_date, completion_date, progress_step_id, parent_step_id, frame_start, frame_end
+        FROM assignments
         WHERE class_id = ?
     """
     assignments = [dict(row) for row in db.execute(query, (class_id,))]
@@ -632,7 +636,7 @@ def add_individual_assignment_route(assignment_id):
         # [OK] Fetch the assignment name
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM assignments WHERE id = ?", (assignment_id,))
+        cursor.execute("SELECT name, frame_start, frame_end FROM assignments WHERE id = ?", (assignment_id,))
         assignment_name_row = cursor.fetchone()
 
         if not assignment_name_row:
@@ -646,8 +650,10 @@ def add_individual_assignment_route(assignment_id):
             users_id=user_id,
             assignment_name=assignment_name,  # [OK] Ensure we include assignment name
             start_date=start_date,
-            completion_date=completion_date
+            completion_date=completion_date,
             # current_status="Not Started",  # [OK] Default status
+            frame_start=assignment_name_row["frame_start"],
+            frame_end=assignment_name_row["frame_end"]
         )
 
         return jsonify({"success": True, "message": "Student added successfully!"})
@@ -683,7 +689,7 @@ def add_student_to_assignment():
 
         # [OK] Fetch required fields from `assignments` table
         assignment = db.execute(
-            "SELECT name, start_date, completion_date FROM assignments WHERE id = ?", (assignment_id,)
+            "SELECT name, start_date, completion_date, frame_start, frame_end FROM assignments WHERE id = ?", (assignment_id,)
         ).fetchone()
 
         if not assignment:
@@ -703,8 +709,9 @@ def add_student_to_assignment():
             assignment_name=assignment_name,
             start_date=start_date,
             completion_date=completion_date,
-            current_status=current_status  # [OK] Fix applied here
-
+            current_status=current_status,  # [OK] Fix applied here
+            frame_start=assignment['frame_start'],
+            frame_end=assignment['frame_end']
         )
 
         # [OK] Fetch step IDs for the assignment's parent_step_id
@@ -735,6 +742,8 @@ def edit_assignment(assignment_id):
         name = data.get("name")
         start_date = data.get("start_date")
         completion_date = data.get("completion_date")
+        frame_start = data.get("frame_start") or None
+        frame_end = data.get("frame_end") or None
 
         # Validate fields
         if not all([name, start_date, completion_date]):
@@ -742,7 +751,7 @@ def edit_assignment(assignment_id):
             return jsonify({"success": False, "error": "Missing required fields"}), 400
 
         # Call function to update the database
-        update_assignment(assignment_id, name, start_date, completion_date)
+        update_assignment(assignment_id, name, start_date, completion_date, frame_start, frame_end)
 
         print(f"[OK] Assignment {assignment_id} updated successfully!")
         return jsonify({"success": True, "message": "Assignment updated successfully!"})

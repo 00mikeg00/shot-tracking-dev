@@ -31,6 +31,7 @@ from app.routes.launcher_routes import launcher_bp
 from app.routes.capstone_routes import capstone_bp
 from app.routes.planning_routes import planning_bp
 from app.routes.video_reference_routes import video_reference_bp
+from app.routes.xsheet_routes import xsheet_bp
 
 login_manager = LoginManager()
 login_manager.login_view = "auth.login"
@@ -84,6 +85,7 @@ def create_app(config_override=None):
     app.register_blueprint(capstone_bp)
     app.register_blueprint(planning_bp)
     app.register_blueprint(video_reference_bp)
+    app.register_blueprint(xsheet_bp)
 
     login_manager.init_app(app)
 

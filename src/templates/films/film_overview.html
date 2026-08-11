@@ -135,7 +135,7 @@
           };
 
           const scenesUrl = "{{ url_for('films.view_scenes', film_id=film.id) }}";
-          const assetsUrl = "{{ url_for('films.view_assets', film_id=film.id) }}";
+          const assetCategoryBaseUrl = "{{ url_for('films.view_asset_category', category='__CATEGORY__') }}";
 
           if (data.scene_steps?.length > 0) renderCharts("Scenes", data.scene_steps, scenesUrl);
           const filteredShots = (data.shot_steps || []).filter(s => {
@@ -146,7 +146,9 @@
           // you pick one and land on its shots, so "Shots" points there too.
           if (filteredShots.length > 0) renderCharts("Shots", filteredShots, scenesUrl);
           for (const [cat, steps] of Object.entries(data.asset_steps || {})) {
-            renderCharts(`Assets: ${cat}`, steps, assetsUrl);
+            const categoryUrl = assetCategoryBaseUrl.replace("__CATEGORY__", encodeURIComponent(cat))
+              + `?film_id={{ film.id }}`;
+            renderCharts(`Assets: ${cat}`, steps, categoryUrl);
           }
         });
     });

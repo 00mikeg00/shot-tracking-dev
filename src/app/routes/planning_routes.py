@@ -3,6 +3,7 @@ import re
 from flask import Blueprint, request, jsonify, session
 from app.database.db import get_db
 from app.utils.auth_utils import login_required
+from app.routes.assignments_routes import update_assignment_status_and_crossflow
 
 planning_bp = Blueprint("planning", __name__, url_prefix="/planning")
 
@@ -30,6 +31,11 @@ def _is_instructor_or_admin():
     if isinstance(roles, dict):
         roles = list(roles.values())
     return any(str(r).lower() in ("instructor", "admin") for r in (roles or []))
+
+
+def _check_owner_or_staff_row(ia_row):
+    session_user_id = session.get("user_id")
+    return str(ia_row["users_id"]) == str(session_user_id) or _is_instructor_or_admin()
 
 
 @planning_bp.route("/upload_drawings", methods=["POST"])
@@ -204,3 +210,97 @@ def delete_drawing(planning_file_id):
     db.commit()
 
     return jsonify({"message": "Deleted"})
+
+
+def _get_owning_assignment(db, individual_assignment_id):
+    return db.execute("""
+        SELECT ia.id, ia.assignment_id, ia.users_id
+        FROM individual_assignments ia
+        WHERE ia.id = ?
+    """, (individual_assignment_id,)).fetchone()
+
+
+@planning_bp.route("/completion/<int:individual_assignment_id>", methods=["GET"])
+@login_required
+def get_planning_completion(individual_assignment_id):
+    db = get_db()
+
+    drawings_count = db.execute("""
+        SELECT COUNT(*) AS n FROM planning_files WHERE individual_assignment_id = ?
+    """, (individual_assignment_id,)).fetchone()["n"]
+
+    video_ref_count = db.execute("""
+        SELECT COUNT(*) AS n FROM video_reference_files WHERE individual_assignment_id = ?
+    """, (individual_assignment_id,)).fetchone()["n"]
+
+    status_row = db.execute("""
+        SELECT ias.current_status
+        FROM individual_assignment_statuses ias
+        JOIN steps s ON ias.step_id = s.id
+        WHERE ias.individual_assignment_id = ? AND s.name = 'Planning'
+    """, (individual_assignment_id,)).fetchone()
+
+    # X-sheet is "complete" once the student has entered at least one row
+    # or symbol -- same bar as drawings/video reference (any content at all).
+    xsheet_rows_count = db.execute("""
+        SELECT COUNT(*) AS n FROM xsheet_rows WHERE individual_assignment_id = ?
+    """, (individual_assignment_id,)).fetchone()["n"]
+    xsheet_symbols_count = db.execute("""
+        SELECT COUNT(*) AS n FROM xsheet_symbols WHERE individual_assignment_id = ?
+    """, (individual_assignment_id,)).fetchone()["n"]
+
+    return jsonify({
+        "drawings": drawings_count > 0,
+        "video_reference": video_ref_count > 0,
+        "xsheet": (xsheet_rows_count > 0) or (xsheet_symbols_count > 0),
+        "current_status": status_row["current_status"] if status_row else None,
+    })
+
+
+@planning_bp.route("/submit/<int:individual_assignment_id>", methods=["POST"])
+@login_required
+def submit_planning(individual_assignment_id):
+    db = get_db()
+
+    ia_row = _get_owning_assignment(db, individual_assignment_id)
+    if not ia_row:
+        return jsonify({"error": f"individual_assignment_id {individual_assignment_id} not found"}), 404
+
+    if not _check_owner_or_staff_row(ia_row):
+        return jsonify({"error": "You can only submit your own Planning work"}), 403
+
+    planning_step = _resolve_planning_step(db, ia_row["assignment_id"])
+    if not planning_step:
+        return jsonify({"error": "This assignment has no Planning step"}), 400
+
+    drawings_count = db.execute("""
+        SELECT COUNT(*) AS n FROM planning_files WHERE individual_assignment_id = ?
+    """, (individual_assignment_id,)).fetchone()["n"]
+    video_ref_count = db.execute("""
+        SELECT COUNT(*) AS n FROM video_reference_files WHERE individual_assignment_id = ?
+    """, (individual_assignment_id,)).fetchone()["n"]
+    xsheet_rows_count = db.execute("""
+        SELECT COUNT(*) AS n FROM xsheet_rows WHERE individual_assignment_id = ?
+    """, (individual_assignment_id,)).fetchone()["n"]
+    xsheet_symbols_count = db.execute("""
+        SELECT COUNT(*) AS n FROM xsheet_symbols WHERE individual_assignment_id = ?
+    """, (individual_assignment_id,)).fetchone()["n"]
+
+    missing = []
+    if drawings_count == 0:
+        missing.append("Drawings")
+    if video_ref_count == 0:
+        missing.append("Video reference")
+    if xsheet_rows_count == 0 and xsheet_symbols_count == 0:
+        missing.append("X-sheet")
+
+    if missing:
+        return jsonify({"error": f"Missing required Planning component(s): {', '.join(missing)}"}), 400
+
+    success, payload = update_assignment_status_and_crossflow(
+        db, individual_assignment_id, planning_step["id"], "Submitted"
+    )
+    if not success:
+        return jsonify(payload), 400
+
+    return jsonify({"message": "Planning submitted", **payload})

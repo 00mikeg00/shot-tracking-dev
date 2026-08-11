@@ -7,10 +7,6 @@
     <div class="flex justify-between items-center mb-4">
       <h1 class="text-4xl font-bold text-white">Films</h1>
       <div>
-        <!-- Config Editor Button -->
-        <button class="bg-blue-500 text-white px-2 py-1 rounded-lg hover:bg-blue-600" onclick="openFilmConfigModal()">
-          Config Editor
-        </button>
         <button
           class="bg-purple-600 text-white px-2 py-1 rounded-lg hover:bg-purple-700"
           onclick="openPipelineEditor()">
@@ -92,49 +88,6 @@
           {% endif %}
         </tbody>
       </table>
-    </div>
-  </div>
-</div>
-
-<!-- Film Config Editor Modal --------------------------------------------------------------------------------------------------------------------->
-<div id="film-config-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden z-50 flex justify-center items-center">
-  <div class="bg-red-950 rounded-lg shadow-lg p-6 w-full max-w-4xl">
-    <div class="flex justify-between items-center mb-4">
-      <h2 class="text-3xl font-bold text-white">Film Config Editor</h2>
-      <button onclick="closeFilmConfigModal()" class="text-gray-300 text-2xl">✖</button>
-    </div>
-
-    <!-- Semester -->
-    <div class="mb-4">
-      <label for="semesterSelect" class="block font-medium text-white">Semester</label>
-      <select id="semesterSelect" class="w-full p-2 border rounded text-black"></select>
-    </div>
-
-    <!-- Controls -->
-    <div class="flex gap-2 mb-4">
-      <button onclick="openAddFilmModal()" class="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600">+ Add
-        Film</button>
-      <button onclick="loadOldFilmConfig()"
-        class="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700">Load Old Config</button>
-      <button onclick="closeFilmConfigModal()"
-        class="bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600">Cancel</button>
-      <button onclick="saveFilmConfigDraft()"
-        class="bg-yellow-500 text-white px-4 py-2 rounded-lg hover:bg-yellow-600">Save Draft</button>
-      <button onclick="saveFinalJson()" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700">Save
-        JSON</button>
-    </div>
-    <!-- Config File List -->
-    <div id="config-file-picker" class="mt-4 hidden bg-red-900 p-4 rounded-lg">
-      <h3 class="text-white text-lg mb-2">📂 Choose a Config File to Load</h3>
-      <ul id="configFileList" class="space-y-2"></ul>
-    </div>
-
-
-    <!-- Film List Container -->
-    <div id="film-list-container" class="bg-red-900 p-4 rounded-lg max-h-[70vh] overflow-y-auto space-y-4">
-      <div id="film-list" class="space-y-4">
-        <p id="no-films-message" class="text-gray-300 text-center">No films added yet.</p>
-      </div>
     </div>
   </div>
 </div>
@@ -306,13 +259,13 @@
       const configInfo = await res.json();
 
       if (!configInfo.exists) {
-        Swal.fire("⚠️ Missing Config", "No config file found. Please use the Config Editor first.", "warning");
+        Swal.fire("⚠️ Missing Config", "No config file found.", "warning");
         return;
       }
 
       const result = await Swal.fire({
         title: "Generate Folders?",
-        html: `Did you create a config file with the Config Editor?<br><br><strong>Last known config:</strong><br>${configInfo.modified}`,
+        html: `<strong>Last known config:</strong><br>${configInfo.modified}`,
         icon: "question",
         showCancelButton: true,
         confirmButtonText: "Yes, generate",
@@ -343,6 +296,5 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <script src="{{ url_for('static', filename='js/crew_modal.js') }}"></script>
-<script src="{{ url_for('static', filename='js/filmConfigEditor.js') }}"></script>
 
 {% endblock %}

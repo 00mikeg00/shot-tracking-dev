@@ -17,11 +17,10 @@ REM  failures and logs to C:\Cincy\logs\install\install_log.txt --
 REM  if a copy fails outright it's flagged at the end instead of
 REM  silently leaving a partial file or folder behind.
 REM
-REM  Configs is NOT part of the %SRC% mirror -- the copy under the
-REM  share is stale/orphaned. assignments_config.json is instead
-REM  pulled directly from the Flask server itself (GAAAP1PRD01W,
-REM  C:\Cincy\Configs), which Flask regenerates on every admin save.
-REM  See step 18.
+REM  assignments_config.json is written by Flask on save to both
+REM  C:\Cincy\Configs on GAAAP1PRD01W (authoritative) and to
+REM  %SRC%\Configs (mirror, for lab machines to pull from here).
+REM  See save_assignment_config_semester() in the config routes.
 REM ============================================================
 
 set "HAD_ERRORS=0"
@@ -223,10 +222,10 @@ REM     above -- the real, current file only ever exists at
 REM     C:\Cincy\Configs\capstone_config_v1.json on GAAAP1PRD01W, regenerated
 REM     by Flask's /films/config/api/save-json on every admin save. Always
 REM     overwritten, not synced from %SRC%.
-echo [19/20] Deploying capstone_config_v1.json...
-robocopy "\\GAAAP1PRD01W\c$\Cincy\Configs" "C:\Cincy\Configs" capstone_config_v1.json /R:3 /W:5 /LOG+:"%INSTALL_LOG%"
+echo [19/20] Deploying assignments_config.json...
+robocopy "%SRC%\Configs" "C:\Cincy\Configs" assignments_config.json /R:3 /W:5 /LOG+:"%INSTALL_LOG%"
 set RC=%ERRORLEVEL%
-call :CheckRC %RC% "capstone_config_v1.json"
+call :CheckRC %RC% "assignments_config.json"
 
 REM -- 20. Add shottracker:// URI scheme to registry ------------
 echo [20/20] Registering shottracker:// URI scheme...

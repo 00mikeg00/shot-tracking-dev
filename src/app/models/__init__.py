@@ -277,7 +277,7 @@ def get_assignments(class_id):
 def get_assignments_by_class(class_id, conn):
     """Fetch all assignments for a given class."""
     query = """
-        SELECT DISTINCT id, name, description, start_date, completion_date
+        SELECT DISTINCT id, name, description, start_date, completion_date, frame_start, frame_end
         FROM assignments
         WHERE class_id = ?
     """
@@ -293,10 +293,15 @@ def add_assignment_to_db(assignment_data):
         # Auto-calculate max_points from parent_step_id
         max_points_map = {1: 4, 2: 16, 342: 8}
         max_points = max_points_map.get(int(assignment_data["parent_step_id"]), 4)
+        # Captured once here and reused below for individual_assignments --
+        # the X-sheet frame range is a snapshot at creation time, not a
+        # live join, so it stays put even if the assignment is edited later.
+        frame_start = assignment_data.get("frame_start") or None
+        frame_end = assignment_data.get("frame_end") or None
 
         cursor.execute("""
-            INSERT INTO assignments (class_id, name, start_date, completion_date, parent_step_id, progress_step_id, max_points)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO assignments (class_id, name, start_date, completion_date, parent_step_id, progress_step_id, max_points, frame_start, frame_end)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             assignment_data["class_id"],
             assignment_data["name"],
@@ -304,7 +309,9 @@ def add_assignment_to_db(assignment_data):
             assignment_data["completion_date"],
             assignment_data["parent_step_id"],
             assignment_data["progress_step_ids"][0],
-            max_points
+            max_points,
+            frame_start,
+            frame_end
         ))
         assignment_id = cursor.lastrowid
         print(f"[OK] Assignment {assignment_id} created successfully.")
@@ -347,15 +354,17 @@ def add_assignment_to_db(assignment_data):
         # [OK] Create individual assignments + status records
         for student in students:
             cursor.execute("""
-                INSERT INTO individual_assignments 
-                (assignment_id, users_id, name, start_date, completion_date)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO individual_assignments
+                (assignment_id, users_id, name, start_date, completion_date, frame_start, frame_end)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 assignment_id,
                 student["user_id"],
                 assignment_data["name"],
                 assignment_data["start_date"],
-                assignment_data["completion_date"]
+                assignment_data["completion_date"],
+                frame_start,
+                frame_end
             ))
             individual_assignment_id = cursor.lastrowid
 
@@ -523,7 +532,7 @@ def get_assignment_name_by_id(assignment_id):
     conn = get_db()
     return conn.execute(query, (assignment_id,)).fetchone()['name']
 
-def update_assignment(assignment_id, name, start_date, completion_date):
+def update_assignment(assignment_id, name, start_date, completion_date, frame_start=None, frame_end=None):
     """Update an assignment and its associated individual assignments."""
     conn = get_db()
     try:
@@ -532,9 +541,9 @@ def update_assignment(assignment_id, name, start_date, completion_date):
         # [OK] Update the main assignment
         cursor.execute("""
             UPDATE assignments
-            SET name = ?, start_date = ?, completion_date = ?
+            SET name = ?, start_date = ?, completion_date = ?, frame_start = ?, frame_end = ?
             WHERE id = ?
-        """, (name, start_date, completion_date, assignment_id))
+        """, (name, start_date, completion_date, frame_start, frame_end, assignment_id))
 
         # [OK] Update individual assignments linked to this assignment
         cursor.execute("""
@@ -616,13 +625,13 @@ def get_individual_assignments_by_assignment(assignment_id, conn):
     """
     return [dict(row) for row in conn.execute(query, (assignment_id,)).fetchall()]
 
-def add_individual_assignment(assignment_id, users_id, assignment_name, start_date, completion_date, current_status):
+def add_individual_assignment(assignment_id, users_id, assignment_name, start_date, completion_date, current_status, frame_start=None, frame_end=None):
     """Add an individual assignment and initialize statuses for each step."""
     print(f"Adding Individual Assignment: {assignment_id}, {users_id}, {assignment_name}, {start_date}, {completion_date}, {current_status}")
 
     insert_query = """
-    INSERT INTO individual_assignments (assignment_id, users_id, name, start_date, completion_date)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO individual_assignments (assignment_id, users_id, name, start_date, completion_date, frame_start, frame_end)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     """
 
     conn = get_db()
@@ -633,7 +642,9 @@ def add_individual_assignment(assignment_id, users_id, assignment_name, start_da
             users_id,
             assignment_name,
             start_date,
-            completion_date
+            completion_date,
+            frame_start,
+            frame_end
         ))
         individual_assignment_id = cursor.lastrowid
 

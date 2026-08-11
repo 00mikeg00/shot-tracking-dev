@@ -141,6 +141,33 @@ def get_shot_lighting_context(shot_id, login_name):
         log(f"ERROR fetching shot lighting context: {e}")
         return None
 
+
+def get_asset_context(asset_id, login_name, step_name=None):
+    """
+    Calls Shot Tracker's asset-context API and returns asset identity
+    (name/category/film) for the asset production OPEN-button flow
+    (Modeling/Texture-Surface/Rigging) -- same idea as get_class_context()
+    but for asset_step_assignments instead of individual_assignments.
+    step_name, when given, is the coordinator override-open's explicit step
+    choice (see individual_assets_view.html's picker) -- passed straight
+    through to Shot Tracker, which echoes it back as requested_step_name
+    for Assets.py to read.
+    """
+    try:
+        url = f"{SHOT_TRACKER_URL}/classes/api/launcher/asset-context"
+        params = {
+            "asset_id":   asset_id,
+            "login_name": login_name
+        }
+        if step_name:
+            params["step_name"] = step_name
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        log(f"ERROR fetching asset context: {e}")
+        return None
+
 # ── Session File ──────────────────────────────────────────────
 def write_session_context(context):
     r"""
@@ -228,6 +255,25 @@ def write_shot_lighting_session(context):
         json.dump(context, f, indent=2)
 
     log(f"Shot lighting session context written: {session_file}")
+    return session_file
+
+
+def write_asset_session(context):
+    r"""
+    Writes the asset-production context JSON to
+    C:\Cincy\sessions\{login_name}_asset_context.json -- distinct filename
+    from every other session file so a student's assignment/capstone/asset
+    sessions never clobber each other on a shared lab machine.
+    """
+    login_name   = context["user"]["login_name"]
+    session_file = os.path.join(SESSIONS_PATH, f"{login_name}_asset_context.json")
+
+    os.makedirs(SESSIONS_PATH, exist_ok=True)
+
+    with open(session_file, "w", encoding="utf-8") as f:
+        json.dump(context, f, indent=2)
+
+    log(f"Asset session context written: {session_file}")
     return session_file
 
 # ── Maya Launch ───────────────────────────────────────────────
@@ -395,6 +441,37 @@ def launch_maya_shot_lighting(login_name, shot_id):
 
     subprocess.Popen([MAYA_EXE, "-command", mel_command])
 
+
+def launch_maya_asset(login_name, asset_id):
+    """
+    Launches Maya and runs Assets.run() for one asset's Modeling/Texture-
+    Surface/Rigging production, same evalDeferred idiom as the other
+    launch_maya_* helpers.
+    """
+    log(f"Launching Maya (asset): {MAYA_EXE}")
+
+    if not _SAFE_LOGIN_NAME.match(login_name or ""):
+        log(f"ERROR: login_name '{login_name}' contains unsafe characters; launching Maya clean instead")
+        subprocess.Popen([MAYA_EXE])
+        return
+
+    try:
+        asset_id_arg = str(int(asset_id))
+    except (TypeError, ValueError):
+        log(f"ERROR: asset_id '{asset_id}' is not a valid integer; launching Maya clean instead")
+        subprocess.Popen([MAYA_EXE])
+        return
+
+    python_code = (
+        "import sys; "
+        "sys.path.insert(0, 'C:/Cincy/scripts'); "
+        "import Assets; "
+        f"Assets.run(login_name='{login_name}', asset_id={asset_id_arg})"
+    )
+    mel_command = f'evalDeferred("python(\\"{python_code}\\")")'
+
+    subprocess.Popen([MAYA_EXE, "-command", mel_command])
+
 # ── Main ──────────────────────────────────────────────────────
 def main():
     log("=" * 50)
@@ -432,6 +509,10 @@ def main():
 
     if action == "shot_lighting":
         _main_shot_lighting(params)
+        return
+
+    if action == "asset":
+        _main_asset(params)
         return
 
     class_id      = params.get("class_id")
@@ -587,6 +668,36 @@ def _main_shot_lighting(params):
 
     launch_maya_shot_lighting(context["user"]["login_name"], context["shot_id"])
     log("Maya launch initiated (shot lighting)")
+
+
+def _main_asset(params):
+    """
+    shottracker://open?action=asset&asset_id=52&login_name=gasawaml
+    shottracker://open?action=asset&asset_id=52&step_name=Modeling&login_name=gasawaml  (coordinator override)
+    """
+    asset_id   = params.get("asset_id")
+    login_name = params.get("login_name")
+    step_name  = params.get("step_name")
+
+    if not asset_id or not login_name:
+        log("ERROR: Missing asset_id or login_name in URI")
+        sys.exit(1)
+
+    log(f"action=asset asset_id={asset_id} login_name={login_name} step_name={step_name}")
+
+    context = get_asset_context(asset_id, login_name, step_name)
+    if not context:
+        log("ERROR: Could not get asset context from Shot Tracker")
+        sys.exit(1)
+
+    log(f"Context received for user: {context['user']['display_name']}")
+    log(f"Film: {context['film_name']} Asset: {context['asset_name']} ({context['category']})")
+
+    session_file = write_asset_session(context)
+    log(f"Asset session ready: {session_file}")
+
+    launch_maya_asset(context["user"]["login_name"], context["asset_id"])
+    log("Maya launch initiated (asset)")
 
 
 if __name__ == "__main__":

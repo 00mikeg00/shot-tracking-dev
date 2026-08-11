@@ -108,6 +108,11 @@ document.addEventListener("DOMContentLoaded", function () {
                     return;
                 }
 
+                // ✅ Optimistically recolor this dropdown right away
+                const selectedOption = this.options[this.selectedIndex];
+                const optimisticColor = selectedOption.style.backgroundColor;
+                if (optimisticColor) this.style.backgroundColor = optimisticColor;
+
                 let indicator = document.createElement("div");
                 indicator.className = "text-green-400 text-xs mt-1 animate-pulse";
                 indicator.textContent = "Saving...";
@@ -122,23 +127,27 @@ document.addEventListener("DOMContentLoaded", function () {
                 }).then(res => res.json())
                     .then(data => {
                         console.log("✅ Status updated", data);
+
+                        if (!data.success) {
+                            throw new Error(data.message || "Update failed");
+                        }
+
                         indicator.textContent = "Saved ✅";
                         indicator.classList.remove("animate-pulse");
 
-                        // 🔁 Trigger crossflow logic
-                        return fetch("/films/api/asset-crossflow-updates", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                shot_id: assetId,
-                                step_id: stepId,
-                                status: this.options[this.selectedIndex].text,
-                            })
+                        // ✅ Confirm this dropdown's color from the server
+                        if (data.color) this.style.backgroundColor = data.color;
+
+                        // 🔁 Apply crossflow updates to other dropdowns for this asset, no reload needed
+                        (data.updated_steps || []).forEach(step => {
+                            const otherStepDiv = assetRow.querySelector(`[data-step-id="${step.step_id}"]`);
+                            const otherSelect = otherStepDiv?.querySelector("select[name^='status-']");
+                            if (otherSelect) {
+                                otherSelect.value = step.node_id;
+                                otherSelect.style.backgroundColor = step.color;
+                            }
                         });
-                    })
-                    .then(res => res.json())
-                    .then(updatedSteps => {
-                        console.log("🔁 Crossflows updated", updatedSteps);
+
                         setTimeout(() => indicator.remove(), 3000);
                     })
                     .catch(err => {

@@ -121,8 +121,13 @@
                                 onclick="window.location.href='/films/assets/view_designs/{{ film.name }}/{{ asset.category }}/{{ asset.name }}'">
                                 🖼️ View Designs
                             </button>
+                            <button type="button" class="bg-green-700 hover:bg-green-800 text-white px-2 py-1 rounded text-xs"
+                                onclick="openAssetStepPicker({{ asset.id }}, '{{ asset.name }}')"
+                                title="Open a specific step's file in Maya, even if it's already approved/locked">
+                                🎬 Open
+                            </button>
 
-                    
+
                         </div>
                     </div>
                 
@@ -332,6 +337,37 @@
     });
 </script>
 <script>
+    window.currentLoginName = {{ session.get('login_name', '') | tojson }};
+
+    // Coordinator override-open: bypasses the normal locked-step gate so a
+    // rig/set/etc can be reopened and fixed even after its step is
+    // approved -- the OPEN button on the student's own dashboard only ever
+    // opens the current unlocked step, deliberately, so this is the
+    // separate escape hatch for going back into an already-approved one.
+    function openAssetStepPicker(assetId, assetName) {
+        Swal.fire({
+            title: `Open "${assetName}" — which step?`,
+            input: "select",
+            inputOptions: {
+                "Proxy": "Proxy",
+                "Modeling": "Modeling",
+                "Texture/Surface": "Texture/Surface",
+                "Rigging": "Rigging"
+            },
+            inputPlaceholder: "Select a step",
+            showCancelButton: true,
+            confirmButtonText: "Open in Maya",
+            inputValidator: (value) => !value && "Please select a step"
+        }).then((result) => {
+            if (!result.isConfirmed || !result.value) return;
+            const loginName = window.currentLoginName || "";
+            window.location.href =
+                `shottracker://open?action=asset&asset_id=${assetId}` +
+                `&step_name=${encodeURIComponent(result.value)}` +
+                `&login_name=${encodeURIComponent(loginName)}`;
+        });
+    }
+
     function openEditAssetModal(assetId, name, dueDate) {
         const modal = document.getElementById("editAssetModal");
         if (!modal) return;

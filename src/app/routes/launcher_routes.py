@@ -367,3 +367,215 @@ def steps_status():
     } for row in rows]
 
     return jsonify({"individual_assignment_id": individual_assignment_id, "steps": steps})
+
+
+# ── Asset production (Modeling / Texture-Surface / Rigging) ───────────
+# Same OPEN-button "silent, no dialogs" pattern as class assignments
+# (Assignments.py's resolve_current_step over Blocking/Blocking Plus/
+# Polish), applied to per-asset production steps instead. Reuses the
+# already-polymorphic step_locks table with entity_type='asset_step',
+# entity_id=assets.id -- see migrate_add_asset_step_codes.py.
+#
+# Ownership differs from assignments: an asset's Modeling/Texture/Rigging
+# steps can each be assigned to a different artist
+# (asset_step_assignments.assigned_user is per-step, not one owner for the
+# whole asset), so lock/unlock check the specific step's assignment, not a
+# single individual_assignments.users_id-style owner.
+
+def _resolve_asset_step_owner(db, asset_id, step_name, login_name):
+    step_row = db.execute("""
+        SELECT s.id, s.name, asa.assigned_user
+        FROM asset_step_assignments asa
+        JOIN steps s ON s.id = asa.step_id
+        WHERE asa.asset_id = ? AND s.name = ?
+    """, (asset_id, step_name)).fetchone()
+    if not step_row:
+        return None, None, (jsonify({"error": f"Step '{step_name}' not found for this asset"}), 404)
+
+    user_row = db.execute("SELECT id FROM users WHERE login_name = ?", (login_name,)).fetchone()
+    if not user_row:
+        return None, None, (jsonify({"error": f"User '{login_name}' not found"}), 404)
+
+    if step_row["assigned_user"] != user_row["id"]:
+        return None, None, (jsonify({"error": "You can only lock/unlock your own assigned asset steps"}), 403)
+
+    return step_row, user_row, None
+
+
+@launcher_bp.route("/asset-context", methods=["GET"])
+def asset_context():
+    """
+    Called by launcher.py to build the Maya session JSON for the asset
+    OPEN-button flow. Same unauthenticated/intranet trust boundary as
+    class-context.
+    """
+    asset_id = request.args.get("asset_id", type=int)
+    login_name = (request.args.get("login_name") or "").strip()
+    # Optional: coordinator override-open from individual_assets_view.html's
+    # step picker, requesting a SPECIFIC step's file regardless of lock
+    # state -- see Assets.run()'s requested_step_name branch. Absent for the
+    # normal student dashboard OPEN flow.
+    step_name = (request.args.get("step_name") or "").strip() or None
+
+    if not asset_id or not login_name:
+        return jsonify({"error": "Missing asset_id or login_name"}), 400
+
+    db = get_db()
+
+    asset = db.execute("""
+        SELECT a.id, a.name, a.category, a.film_id, f.name AS film_name
+        FROM assets a
+        JOIN films f ON f.id = a.film_id
+        WHERE a.id = ?
+    """, (asset_id,)).fetchone()
+    if not asset:
+        return jsonify({"error": f"asset_id {asset_id} not found"}), 404
+
+    user = db.execute(
+        "SELECT id, login_name, name FROM users WHERE login_name = ?", (login_name,)
+    ).fetchone()
+    if not user:
+        return jsonify({"error": f"User '{login_name}' not found"}), 404
+
+    return jsonify({
+        "asset_id": asset["id"],
+        "asset_name": asset["name"],
+        "category": asset["category"],
+        "film_id": asset["film_id"],
+        "film_name": asset["film_name"],
+        "requested_step_name": step_name,
+        "user": {
+            "id": user["id"],
+            "login_name": user["login_name"],
+            "display_name": user["name"]
+        }
+    })
+
+
+@launcher_bp.route("/asset-steps/status", methods=["GET"])
+def asset_steps_status():
+    """
+    Live lock state for every content step (Design/Modeling/Texture-
+    Surface/Rigging/Shot Ready, never FB-prefixed) of one asset, same
+    shape as steps_status() so Assets.py's resolve_current_step() (ported
+    from Assignments.py) works unmodified against either.
+    """
+    asset_id = request.args.get("asset_id", type=int)
+    if not asset_id:
+        return jsonify({"error": "Missing asset_id"}), 400
+
+    db = get_db()
+
+    asset_row = db.execute("SELECT id FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    if not asset_row:
+        return jsonify({"error": f"asset_id {asset_id} not found"}), 404
+
+    rows = db.execute("""
+        SELECT
+            s.id AS step_id,
+            s.name AS step_name,
+            s.order_num,
+            sc.step_code AS short_code,
+            sl.locked,
+            locker.login_name AS locked_by,
+            sl.locked_at,
+            unlocker.login_name AS unlocked_by,
+            sl.unlocked_at
+        FROM asset_step_assignments asa
+        JOIN steps s ON s.id = asa.step_id
+        LEFT JOIN step_codes sc ON sc.step_name = s.name
+        LEFT JOIN step_locks sl
+            ON sl.entity_type = 'asset_step' AND sl.entity_id = ? AND sl.step_id = s.id
+        LEFT JOIN users locker ON locker.id = sl.locked_by
+        LEFT JOIN users unlocker ON unlocker.id = sl.unlocked_by
+        WHERE asa.asset_id = ?
+          AND s.name NOT LIKE 'FB %' AND s.name NOT LIKE 'Grade %'
+        ORDER BY s.order_num ASC
+    """, (asset_id, asset_id)).fetchall()
+
+    steps = [{
+        "step_id": row["step_id"],
+        "name": row["step_name"],
+        "short_code": row["short_code"],
+        "order_num": row["order_num"],
+        "locked": bool(row["locked"]),
+        "locked_by": row["locked_by"],
+        "locked_at": row["locked_at"],
+        "unlocked_by": row["unlocked_by"],
+        "unlocked_at": row["unlocked_at"],
+    } for row in rows]
+
+    return jsonify({"asset_id": asset_id, "steps": steps})
+
+
+@launcher_bp.route("/asset-steps/lock", methods=["POST"])
+def lock_asset_step():
+    data = request.get_json(silent=True) or {}
+    asset_id = data.get("asset_id")
+    step_name = (data.get("step_name") or "").strip()
+    login_name = (data.get("login_name") or "").strip()
+
+    if not asset_id or not step_name or not login_name:
+        return jsonify({"error": "Missing asset_id, step_name, or login_name"}), 400
+
+    db = get_db()
+
+    step_row, user_row, error = _resolve_asset_step_owner(db, asset_id, step_name, login_name)
+    if error:
+        return error
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    db.execute("""
+        INSERT INTO step_locks (entity_type, entity_id, step_id, locked, locked_by, locked_at)
+        VALUES ('asset_step', ?, ?, 1, ?, ?)
+        ON CONFLICT(entity_type, entity_id, step_id)
+        DO UPDATE SET locked = 1, locked_by = excluded.locked_by, locked_at = excluded.locked_at
+    """, (asset_id, step_row["id"], user_row["id"], now))
+    db.commit()
+
+    return jsonify({
+        "success": True,
+        "step_id": step_row["id"],
+        "step_name": step_row["name"],
+        "locked": True,
+        "locked_by": login_name,
+        "locked_at": now
+    })
+
+
+@launcher_bp.route("/asset-steps/unlock", methods=["POST"])
+def unlock_asset_step():
+    """Self-unlock, same reasoning as unlock_step() -- the assigned artist can always unlock their own step."""
+    data = request.get_json(silent=True) or {}
+    asset_id = data.get("asset_id")
+    step_name = (data.get("step_name") or "").strip()
+    login_name = (data.get("login_name") or "").strip()
+
+    if not asset_id or not step_name or not login_name:
+        return jsonify({"error": "Missing asset_id, step_name, or login_name"}), 400
+
+    db = get_db()
+
+    step_row, user_row, error = _resolve_asset_step_owner(db, asset_id, step_name, login_name)
+    if error:
+        return error
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    db.execute("""
+        INSERT INTO step_locks (entity_type, entity_id, step_id, locked, unlocked_by, unlocked_at)
+        VALUES ('asset_step', ?, ?, 0, ?, ?)
+        ON CONFLICT(entity_type, entity_id, step_id)
+        DO UPDATE SET locked = 0, unlocked_by = excluded.unlocked_by, unlocked_at = excluded.unlocked_at
+    """, (asset_id, step_row["id"], user_row["id"], now))
+    db.commit()
+
+    return jsonify({
+        "success": True,
+        "step_id": step_row["id"],
+        "step_name": step_row["name"],
+        "locked": False,
+        "unlocked_by": login_name,
+        "unlocked_at": now
+    })

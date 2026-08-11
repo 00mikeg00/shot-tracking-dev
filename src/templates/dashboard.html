@@ -12,7 +12,13 @@
 
 <div class="container mx-auto p-6">
   <p class="text-sm text-red-500">
-  <h1 class="text-3xl font-bold text-white">Welcome, {{ session['username'] }}!</h1>
+  <div class="flex items-center justify-between">
+    <h1 class="text-3xl font-bold text-white">Welcome, {{ session['username'] }}!</h1>
+    <button id="dashboard-help-btn" type="button"
+            class="bg-indigo-700 hover:bg-indigo-600 text-white px-4 py-2 rounded-lg flex items-center gap-1">
+      ❓ Help
+    </button>
+  </div>
   {% if view_user_name %}
   <p class="text-sm text-yellow-400 mt-1">
     Viewing as: <strong>{{ view_user_name }}</strong>
@@ -78,11 +84,145 @@
   </div>
 </div>
 
+<!-- Help modal: static content, edit the placeholder steps directly below.
+     Accordion open/close behavior lives in dashboard_help.js. -->
+<div id="dashboard-help-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+  <div class="bg-gray-900 rounded-lg p-6 w-full max-w-2xl max-h-[85vh] overflow-y-auto mx-4">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-white font-bold text-xl">Help — What do I do?</h3>
+      <button id="dashboard-help-close" type="button"
+              class="text-gray-400 hover:text-white text-2xl leading-none">&times;</button>
+    </div>
+
+    <div class="space-y-2">
+      <div class="help-section border border-gray-700 rounded-lg overflow-hidden">
+        <button type="button" class="help-section-toggle w-full flex items-center justify-between text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white font-semibold" data-target="help-sec-start-maya">
+          <span>1. Start/Open Maya Assignment</span>
+          <span class="help-chevron transition-transform">▸</span>
+        </button>
+        <div id="help-sec-start-maya" class="help-section-content hidden px-4 py-3 bg-gray-900 text-gray-300 text-sm">
+          <ol class="list-decimal list-inside space-y-1">
+            <li>Find the class and assignment on this page.</li>
+            <li>Click on Open</li>
+            <p>This will start maya and open or start your assignment. NO need to double click on the icon on the desktop! </p>
+          </ol>
+        </div>
+      </div>
+
+      <div class="help-section border border-gray-700 rounded-lg overflow-hidden">
+        <button type="button" class="help-section-toggle w-full flex items-center justify-between text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white font-semibold" data-target="help-sec-save-maya">
+          <span>2. Save Maya File</span>
+          <span class="help-chevron transition-transform">▸</span>
+        </button>
+        <div id="help-sec-save-maya" class="help-section-content hidden px-4 py-3 bg-gray-900 text-gray-300 text-sm">
+          <ol class="list-decimal list-inside space-y-1">
+            <p>In Maya, CTL+S will save the file on the server. No need to save Locally!</p>
+            <p>Incremental Save will bump up a version. It will duplicate what you have, just called a higher version.</p>
+          </ol>
+        </div>
+      </div>
+
+      <div class="help-section border border-gray-700 rounded-lg overflow-hidden">
+        <button type="button" class="help-section-toggle w-full flex items-center justify-between text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white font-semibold" data-target="help-sec-playblast">
+          <span>3. Create Playblast (Movie)</span>
+          <span class="help-chevron transition-transform">▸</span>
+        </button>
+        <div id="help-sec-playblast" class="help-section-content hidden px-4 py-3 bg-gray-900 text-gray-300 text-sm">
+          <ol class="list-decimal list-inside space-y-1">
+            <li>Click on the Black Filmstrip to make a movie.</li>
+            <li>Submit assignment - this will submit the movie to the server to be graded.</li>
+            <p>MOVIE FOR YOU - will create a movie in C:/Cincy/Movies with your assignment and name on it.</p>
+          </ol>
+        </div>
+      </div>
+
+      <div class="help-section border border-gray-700 rounded-lg overflow-hidden">
+        <button type="button" class="help-section-toggle w-full flex items-center justify-between text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white font-semibold" data-target="help-sec-reviews">
+          <span>4. Reviews and Retakes</span>
+          <span class="help-chevron transition-transform">▸</span>
+        </button>
+        <div id="help-sec-reviews" class="help-section-content hidden px-4 py-3 bg-gray-900 text-gray-300 text-sm">
+          <ol class="list-decimal list-inside space-y-1">
+            <li>Once submitted, the status of your assignment will change to Submitted. That will tell your instructor that the shot is
+            ready to be reviewed.</li>
+            <li>Once reviewed, you MAY have a video review. If you do, it will show up under the assignment. The latest TWO reviews will
+            show up.</li>
+            <li>It will also say that there is a grade and a retake. It is up to you to either change the status to Graded, OR to make
+            changes to the shot and resubmit.</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="help-section border border-gray-700 rounded-lg overflow-hidden">
+        <button type="button" class="help-section-toggle w-full flex items-center justify-between text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white font-semibold" data-target="help-sec-planning-only">
+          <span>5. Planning Only Assignments</span>
+          <span class="help-chevron transition-transform">▸</span>
+        </button>
+        <div id="help-sec-planning-only" class="help-section-content hidden px-4 py-3 bg-gray-900 text-gray-300 text-sm">
+          <ol class="list-decimal list-inside space-y-1">
+            <li>Click on the Steps button. This will open the Planning section.</li>
+            <li>Click on Submit Planning</li>
+            <li>Upload Drawings and Vid Ref in the right places.</li>
+            <li>Click on Open X-Sheet to open the X-sheet</li>
+            <li>Submit Planning will only allow you to submit if all three of the aspects have been filled (drawings, vid ref, x-sheet)</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="help-section border border-gray-700 rounded-lg overflow-hidden">
+        <button type="button"
+          class="help-section-toggle w-full flex items-center justify-between text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white font-semibold"
+          data-target="help-sec-xsheet">
+          <span>6. Using the X-sheet</span>
+          <span class="help-chevron transition-transform">▸</span>
+        </button>
+        <div id="help-sec-xsheet" class="help-section-content hidden px-4 py-3 bg-gray-900 text-gray-300 text-sm">
+            <p>The length is determined by the shot. If you need more frames:</p>
+            <p>Add more frames at the bottom.</p>
+            <p>The columns are this:</p>
+          <ol class="list-decimal list-inside space-y-1">
+            <li><b>Words</b> - if you have a dialog shot. This is where each word goes. Just one word at a time.</li>
+            <li><b>Sounds</b> - if you have a dialog shot. This is where the phonemes go. You can also add symbols for holds, accents, ups, and
+            downs.</li>
+            <li><b>Blocking</b> - type in the frame where your poses are. Simple descriptions are best.</li>
+            <li><b>Breakdown/Tween</b> - you can add where your breakdowns and tweens are.</li>
+            <li><b>Notes</b> - any notes you may have. This keeps the Blocking column simpler.</li>
+            <p>You may add more columns for Blinks, Hands, Tails, Legs, and Cameras, if you like.</p>
+            <p>Save will save the x-sheet.</p>
+            <p>Share for feedback will send it to the markup to be graded - this is optional. Submitting your planning
+            only requires that the x-sheet has been saved with something on it, not that you've shared it.</p>
+          </ol>
+        </div>
+      </div>
+
+      <div class="help-section border border-gray-700 rounded-lg overflow-hidden">
+        <button type="button" class="help-section-toggle w-full flex items-center justify-between text-left px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white font-semibold" data-target="help-sec-complex">
+          <span>7. Complex Assignments with Multiple Steps</span>
+          <span class="help-chevron transition-transform">▸</span>
+        </button>
+        <div id="help-sec-complex" class="help-section-content hidden px-4 py-3 bg-gray-900 text-gray-300 text-sm">
+          <ol class="list-decimal list-inside space-y-1">
+            <li>Most of the upper level assignments have different steps to them - Planning, Blocking, Blocking Plus, and Polish</li>
+            <li>Planning is done the same way as the Planning Alone assignment.</li>
+            <p>Once your assignment is submitted in a step, you can move on to the next step.</p>
+            <li>In MAYA, make sure you save the step using the GAA Save button (second from left on the GAA shelf).</li>
+            <p>This will only work with assignments that have multiple steps.</p>
+            <li>If you want to move on, you can lock the step and save the new step.</li>
+            <li>You can always go back to an older step by using the GAA Open button (third from left on the GAA shelf).</li>
+            <p>this will allow you to unlock and open any step.</p>
+            <p><b>BE CAREFUL DOING THIS as you may LOSE WORK!</b></p>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- JavaScript to Fetch Data -->
 
 <script src="{{ url_for('static', filename='js/dashboard_films.js') }}"></script>
 <script src="{{ url_for('static', filename='js/dashboard_classes.js') }}"></script>
+<script src="{{ url_for('static', filename='js/dashboard_help.js') }}"></script>
 
 
 

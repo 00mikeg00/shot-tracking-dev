@@ -214,7 +214,7 @@
               <td class="px-3 py-2">{{ shot.assignee or "—" }}</td>
               <td class="px-4 py-2">
                 <div class="flex flex-row gap-4 overflow-x-auto py-1">
-                  {% for step in shot.steps if step.step_name != "Thumbnails" and step.step_name != "FB Thumbnails" %}
+                  {% for step in shot.steps if step.step_name != "Thumbnails" and step.step_name != "FB Thumbnails" and step.status != "Approved" %}
                   <div class="flex flex-col bg-gray-800 px-2 py-1 rounded text-xs min-w-[220px]"
                     data-step-column-id="{{ step.step_id }}">
                     <label class="text-[10px] text-gray-300">{{ step.step_name }}</label>
@@ -254,65 +254,11 @@
               </td>
 
               <td class="px-3 py-2 whitespace-nowrap">
-                {% if scene_layout_done %}
-                <a href="shottracker://open?action=shot_layout&shot_id={{ shot.id }}&login_name={{ session['login_name'] | urlencode }}"
-                  class="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs inline-block">
-                  Open Layout in Maya
-                </a>
-                {% if shot.layout_locked %}
-                <span class="bg-gray-600 text-white px-3 py-1 rounded text-xs inline-block">Layout Approved</span>
-                {% else %}
-                <button type="button" data-shot-id="{{ shot.id }}" data-login-name="{{ session['login_name'] }}"
-                  onclick="approveShotLayout(this)"
-                  class="bg-green-700 hover:bg-green-600 text-white px-3 py-1 rounded text-xs">
-                  Approve Layout
+                <button type="button" class="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs"
+                  onclick="openShotStepPicker({{ shot.id }})"
+                  title="Open any of this shot's files in Maya, regardless of approval state">
+                  🎬 Open
                 </button>
-                {% endif %}
-                {% else %}
-                <span class="text-gray-400 italic text-xs" title="Scene Layout must be marked done first">
-                  Layout locked (scene not done)
-                </span>
-                {% endif %}
-
-                {% if shot.layout_locked %}
-                <a href="shottracker://open?action=shot_animation&shot_id={{ shot.id }}&login_name={{ session['login_name'] | urlencode }}"
-                  class="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs inline-block">
-                  Open Animation in Maya
-                </a>
-                {% if shot.animation_locked %}
-                <span class="bg-gray-600 text-white px-3 py-1 rounded text-xs inline-block">Animation Approved</span>
-                {% else %}
-                <button type="button" data-shot-id="{{ shot.id }}" data-login-name="{{ session['login_name'] }}"
-                  onclick="approveShotAnimation(this)"
-                  class="bg-green-700 hover:bg-green-600 text-white px-3 py-1 rounded text-xs">
-                  Approve Animation
-                </button>
-                {% endif %}
-                {% else %}
-                <span class="text-gray-400 italic text-xs" title="Layout must be approved first">
-                  Animation locked (Layout not approved)
-                </span>
-                {% endif %}
-
-                {% if shot.animation_locked %}
-                <a href="shottracker://open?action=shot_lighting&shot_id={{ shot.id }}&login_name={{ session['login_name'] | urlencode }}"
-                  class="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs inline-block">
-                  Open Lighting in Maya
-                </a>
-                {% if shot.lighting_locked %}
-                <span class="bg-gray-600 text-white px-3 py-1 rounded text-xs inline-block">Lighting Approved</span>
-                {% else %}
-                <button type="button" data-shot-id="{{ shot.id }}" data-login-name="{{ session['login_name'] }}"
-                  onclick="approveShotLighting(this)"
-                  class="bg-green-700 hover:bg-green-600 text-white px-3 py-1 rounded text-xs">
-                  Approve Lighting
-                </button>
-                {% endif %}
-                {% else %}
-                <span class="text-gray-400 italic text-xs" title="Animation must be approved first">
-                  Lighting locked (Animation not approved)
-                </span>
-                {% endif %}
                 <button type="button" class="bg-red-800 hover:bg-red-600 text-white px-3 py-1 rounded text-xs"
                   onclick="confirmDeleteShot({{ shot.id }})">
                   Delete Shot
@@ -429,6 +375,39 @@
 
 
   <script>
+    window.currentLoginName = {{ session.get('login_name', '') | tojson }};
+
+    // Coordinator picker: open any of this shot's files regardless of
+    // approval state (Layout is scene-gated only, Animation/Lighting are
+    // opened as-is if a file exists -- CapstoneAnimation.py/CapstoneLighting.py
+    // only block creating a brand-new file, never reopening an existing one).
+    function openShotStepPicker(shotId) {
+      Swal.fire({
+        title: "Open — which file?",
+        input: "select",
+        inputOptions: {
+          "Layout": "Layout",
+          "Animation": "Animation",
+          "Lighting": "Lighting"
+        },
+        inputPlaceholder: "Select a step",
+        showCancelButton: true,
+        confirmButtonText: "Open in Maya",
+        inputValidator: (value) => !value && "Please select a step"
+      }).then((result) => {
+        if (!result.isConfirmed || !result.value) return;
+        const actionMap = {
+          "Layout": "shot_layout",
+          "Animation": "shot_animation",
+          "Lighting": "shot_lighting"
+        };
+        const loginName = window.currentLoginName || "";
+        window.location.href =
+          `shottracker://open?action=${actionMap[result.value]}&shot_id=${shotId}` +
+          `&login_name=${encodeURIComponent(loginName)}`;
+      });
+    }
+
     // Simple Open/Close for Testing
     function openBulkEditModal() {
       const modal = document.getElementById("bulkEditModal");

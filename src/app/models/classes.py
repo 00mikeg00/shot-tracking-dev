@@ -367,7 +367,7 @@ def add_students_to_class_and_assignments(class_id, student_ids):
         with conn:
             # Get all assignments for this class
             assignments = conn.execute("""
-                SELECT id, name, start_date, completion_date, parent_step_id
+                SELECT id, name, start_date, completion_date, parent_step_id, frame_start, frame_end
                 FROM assignments WHERE class_id = ?
             """, (class_id,)).fetchall()
 
@@ -394,10 +394,11 @@ def add_students_to_class_and_assignments(class_id, student_ids):
                     # Insert individual assignment
                     conn.execute("""
                         INSERT INTO individual_assignments
-                        (assignment_id, users_id, name, start_date, completion_date)
-                        VALUES (?, ?, ?, ?, ?)
+                        (assignment_id, users_id, name, start_date, completion_date, frame_start, frame_end)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (assignment_id, student_id, assignment["name"],
-                          assignment["start_date"], assignment["completion_date"]))
+                          assignment["start_date"], assignment["completion_date"],
+                          assignment["frame_start"], assignment["frame_end"]))
 
                     individual_assignment_id = conn.execute(
                         "SELECT last_insert_rowid()"
@@ -541,7 +542,7 @@ def copy_assignments_from_class(source_class_id, target_class_id):
     db = get_db()
 
     source_assignments = db.execute("""
-        SELECT a.name, a.parent_step_id, a.max_points,
+        SELECT a.name, a.parent_step_id, a.max_points, a.frame_start, a.frame_end,
                GROUP_CONCAT(aps.step_id) AS step_ids
         FROM assignments a
         JOIN assignment_progress_steps aps ON aps.assignment_id = a.id
@@ -562,6 +563,8 @@ def copy_assignments_from_class(source_class_id, target_class_id):
             "parent_step_id": a["parent_step_id"],
             "progress_step_ids": step_ids,
             "assign_option": "none",
-            "selected_students": []
+            "selected_students": [],
+            "frame_start": a["frame_start"],
+            "frame_end": a["frame_end"]
         })
 
