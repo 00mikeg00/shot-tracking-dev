@@ -1313,6 +1313,35 @@ export default function MarkupTool() {
             })
             .catch(err => console.error("❌ Failed to update scene status", err));
         }
+
+        // ⭐ Mark the source file reviewed (_R) once this shot's status is
+        // Approved -- get_films_for_review() buckets a film file into
+        // "Reviewed Films" purely by checking for "_r." in the filename
+        // (see get_files_for_review.py), so without this rename an
+        // approved shot never leaves "Films to Review". Mirrors what the
+        // Scene Review Session's own Save button already does
+        // unconditionally; here it's gated on Approved since this button
+        // saves grades for statuses that aren't final yet too (Retake, etc).
+        const approvedNow = selectedItem.statuses.some(
+          (s) => (s.status || "").trim().toLowerCase() === "approved"
+        );
+        if (approvedNow && selectedItem.file_path) {
+          try {
+            const favorite =
+              typeof document !== "undefined"
+                ? document.getElementById("favoriteCheckbox")?.checked || false
+                : false;
+            const renameRes = await fetch(`${API_BASE_URL}/review/save_reviewed`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ file_path: selectedItem.file_path, favorite }),
+            });
+            const renameJson = await renameRes.json();
+            console.log("🏷️ Marked reviewed (_R):", renameJson);
+          } catch (err) {
+            console.error("❌ Failed to mark file reviewed (_R):", err);
+          }
+        }
       }
 
       Swal.fire({

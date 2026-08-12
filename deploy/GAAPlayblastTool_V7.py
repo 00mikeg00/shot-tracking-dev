@@ -56,6 +56,48 @@ ASSIGNMENT_STEP_NAME_MAP = {
     "P": "Polish"
 }
 FILM_STEP_CODES = ["LAY", "ANIM", "LGT"]
+FILM_DEPT_NAME_MAP = {
+    "LAY": "Layout",
+    "ANIM": "Animation",
+    "LGT": "Lighting"
+}
+
+# Matches both shapes in use across the capstone pipeline:
+#   Film_Scene_Shot_LAY_User_v#.mb / Film_Scene_Shot_LGT_User_v#.mb
+#     (CapstoneLayout.py / CapstoneLighting.py -- no sub-step)
+#   Film_Scene_Shot_ANIM_User_{BL|BP|P}_V###.mb
+#     (CapstoneAnimation.py -- Blocking/Blocking Plus/Polish sub-step)
+# User/film names may contain spaces but never underscores (matches the
+# convention every Capstone*.py filename builder relies on), so a lazy
+# `.+?` for each field, anchored on the literal underscores and the
+# terminal _v###, unambiguously separates them regardless of which shape
+# is present -- unlike the old fixed rsplit(_, 5), which only worked for
+# the 6-field (no sub-step) shape and silently mis-parsed/rejected every
+# Animation file.
+FILM_FILENAME_RE = re.compile(
+    r"^(?P<film>.+?)_(?P<scene>\d{3})_(?P<shot>\d{3})_(?P<dept>LAY|ANIM|LGT)_"
+    r"(?P<user>.+?)(?:_(?P<substep>BL|BP|P))?_[vV](?P<version>\d+)$",
+    re.IGNORECASE
+)
+
+
+def parse_film_filename(filename):
+    """
+    Returns a dict with film/scene/shot/dept/user/substep/version if
+    filename matches the capstone film-shot convention, else None.
+    dept is upper-cased (LAY/ANIM/LGT); substep is upper-cased (BL/BP/P)
+    or None for departments that don't have sub-steps.
+    """
+    name = os.path.splitext(filename)[0]
+    m = FILM_FILENAME_RE.match(name)
+    if not m:
+        return None
+
+    d = m.groupdict()
+    d["dept"] = d["dept"].upper()
+    if d["substep"]:
+        d["substep"] = d["substep"].upper()
+    return d
 
 
 # ─────────────────────────────────────────────
@@ -64,22 +106,13 @@ FILM_STEP_CODES = ["LAY", "ANIM", "LGT"]
 
 def is_film_scene(filename):
     """
-    Detect FILM_SCENE_SHOT_STEP_USER_v# pattern.
+    Detect the capstone film-shot naming convention (Layout/Lighting's
+    FILM_SCENE_SHOT_STEP_USER_v#, or Animation's ...STEP_USER_SUBSTEP_V###
+    -- see FILM_FILENAME_RE).
     Example: Vacation_010_010_LAY_Mike_v1.mb
+    Example: Vacation_010_010_ANIM_Mike_BL_V001.mb
     """
-    name = os.path.splitext(filename)[0]
-    parts = name.rsplit("_", 5)
-    if len(parts) != 6:
-        return False
-
-    film, scene, shot, step, user, version = parts
-    if not re.match(r"^\d{3}$", scene):
-        return False
-    if not re.match(r"^\d{3}$", shot):
-        return False
-    if not version.lower().startswith("v"):
-        return False
-    return True
+    return parse_film_filename(filename) is not None
 
 
 def get_scene_metadata():
@@ -491,21 +524,40 @@ def perform_film_playblast(width, height):
         return
 
     directory, filename = os.path.split(current_path)
-    name_no_ext = os.path.splitext(filename)[0]
 
-    parts = name_no_ext.rsplit("_", 5)
-    if len(parts) != 6 or not parts[-1].lower().startswith("v"):
-        cmds.warning("Filename must follow: Title_Scene_Shot_STEP_User_v#.mb")
+    parsed = parse_film_filename(filename)
+    if not parsed:
+        cmds.warning(
+            "Filename must follow: Title_Scene_Shot_STEP_User_v#.mb "
+            "(Animation adds a Blocking/Blocking Plus/Polish sub-step: "
+            "Title_Scene_Shot_ANIM_User_BL_V###.mb)"
+        )
         return
 
-    film_title, scene, shot, step, user, version = parts
-    step = step.upper()
+    film_title = parsed["film"]
+    scene = parsed["scene"]
+    shot = parsed["shot"]
+    dept = parsed["dept"]
+    user = parsed["user"]
+    substep = parsed["substep"]
+    version = parsed["version"]
 
-    if step not in FILM_STEP_CODES:
-        cmds.warning(f"Unknown film step '{step}'. Expected one of: {', '.join(FILM_STEP_CODES)}")
+    if dept not in FILM_STEP_CODES:
+        cmds.warning(f"Unknown film step '{dept}'. Expected one of: {', '.join(FILM_STEP_CODES)}")
         return
 
-    playblast_name = f"{film_title}_{scene}_{shot}_{step}_{user}_{version}"
+    dept_name = FILM_DEPT_NAME_MAP.get(dept, dept)
+    substep_name = ASSIGNMENT_STEP_NAME_MAP.get(substep) if substep else None
+    print(f"[INFO] Film shot: department={dept_name} ({dept}) step={substep_name or 'n/a'}")
+
+    # step_tag keeps the sub-step (if any) baked into the movie's own
+    # filename/HUD, same as it's baked into the source .mb filename -- but
+    # get_scene_status's step_match regex only ever looks at the FIRST
+    # letters-only run after the scene/shot digits (see review_routes.py),
+    # so appending "_BL"/"_BP"/"_P" here doesn't change which department it
+    # resolves to.
+    step_tag = f"{dept}_{substep}" if substep else dept
+    playblast_name = f"{film_title}_{scene}_{shot}_{step_tag}_{user}_v{version}"
 
     temp_dir = "C:/Temp/Playblast"
     os.makedirs(temp_dir, exist_ok=True)
@@ -576,9 +628,9 @@ def perform_film_playblast(width, height):
         print(f"[OK] Copied to versioned destination: {dest_path}")
 
         final_version_match = re.search(r"_v(\d+)", dest_path)
-        final_version = final_version_match.group(1) if final_version_match else version.lstrip("vV")
+        final_version = final_version_match.group(1) if final_version_match else version
 
-        hud_text = f"{film_title}-{scene}-{shot}-{step}-{user}-v{final_version}"
+        hud_text = f"{film_title}-{scene}-{shot}-{step_tag.replace('_', '-')}-{user}-v{final_version}"
         hud_filter = (
             f"drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':"
             f"text='{hud_text}':"
