@@ -71,8 +71,8 @@ def add_class_route():
             new_class_data = parse_class_form(request.form)
 
             conn.execute("""
-                INSERT INTO classes (semester_id, code, class_number, class_name, description, instructor_id)
-                VALUES (:semester_id, :code, :class_number, :class_name, :description, :instructor_id)
+                INSERT INTO classes (semester_id, code, class_number, class_name, description, instructor_id, archived)
+                VALUES (:semester_id, :code, :class_number, :class_name, :description, :instructor_id, 0)
             """, new_class_data)
             conn.commit()
 
