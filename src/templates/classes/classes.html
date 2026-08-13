@@ -63,8 +63,8 @@
                 <td class="p-3 flex space-x-2">
                   <a href="{{ url_for('classes.edit_class', class_id=class_item['id']) }}"
                     class="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1 rounded-lg">Edit</a>
-                  <button type="button" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-lg"
-                    onclick="openClassConfigModal({{ class_item['id'] }}, {{ class_item['class_name'] | tojson }})">
+                  <button type="button" class="config-class-btn bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-lg"
+                    data-class-id="{{ class_item['id'] }}" data-class-name="{{ class_item['class_name'] }}">
                     Config
                   </button>
                   <button type="button" class="bg-red-800 hover:bg-red-600 text-white px-3 py-1 rounded-lg"

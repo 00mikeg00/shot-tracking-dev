@@ -129,6 +129,12 @@ window.closeRigModal = function () {
 // ─────────────────────────────────────────────────────────────────────────────
 
 document.body.addEventListener("click", (e) => {
+  const configBtn = e.target.closest(".config-class-btn");
+  if (configBtn) {
+    openClassConfigModal(parseInt(configBtn.dataset.classId, 10), configBtn.dataset.className);
+    return;
+  }
+
   if (e.target.id === "class-config-add-assignment-btn") {
     openNewAssignmentModal();
   }
