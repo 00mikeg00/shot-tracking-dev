@@ -214,12 +214,34 @@ def find_outdated_references():
     return outdated
 
 
+def _normalize_path(path):
+    return os.path.normcase(os.path.normpath(path))
+
+
 def update_references(items):
-    """Swaps each reference node onto its latest file in place -- keeps the namespace and any scene-side edits, doesn't add a duplicate reference."""
+    """
+    Swaps each reference node onto its latest file in place -- keeps the
+    namespace and any scene-side edits, doesn't add a duplicate reference.
+    force=True is required here (every other destructive cmds.file() call
+    in this pipeline -- open=True, save=True -- passes it too): without
+    it, Maya silently no-ops instead of prompting to confirm, since
+    there's no dialog to answer in a script, and the swap never actually
+    happens even though the command returns without raising. Verifies the
+    reference's filename afterward rather than trusting a lack of
+    exception, since that's exactly the failure mode this was missing.
+    """
     updated, failed = [], []
     for item in items:
         try:
-            cmds.file(item["latest_path"], loadReference=item["reference_node"])
+            cmds.file(item["latest_path"], loadReference=item["reference_node"],
+                      force=True, ignoreVersion=True)
+
+            actual_path = cmds.referenceQuery(item["reference_node"], filename=True, withoutCopyNumber=True)
+            if _normalize_path(actual_path) != _normalize_path(item["latest_path"]):
+                log(f"ERROR: Update for '{item['asset_name']}' did not take effect -- reference still points at {actual_path}")
+                failed.append(item)
+                continue
+
             log(f"Updated '{item['asset_name']}': v{item['current_version']} -> v{item['latest_version']} ({item['latest_path']})")
             updated.append(item)
         except RuntimeError as e:
