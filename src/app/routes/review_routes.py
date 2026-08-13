@@ -1961,15 +1961,25 @@ def update_scene_status():
         step_name_upper = (step_name or "").upper()
 
         # 🔹 Get forward and reverse crossflow links
+        # Links are per-status-node edges in the workflow markup diagram (e.g. a
+        # "CUT" node on FB Animation wired straight to FB Lighting's "CUT" node,
+        # to cascade cuts downstream). Without matching parent_node_id/child_node_id
+        # to the actual new_status, a link meant only for one status (e.g. CUT)
+        # gets applied on every status change of that step -- e.g. approving FB
+        # Animation was incorrectly also approving FB Lighting via a CUT-only link.
         forward_links = cur.execute("""
-            SELECT DISTINCT to_flow_id FROM links
-            WHERE step_id = ? AND to_flow_id IS NOT NULL
-        """, (step_id,)).fetchall()
+            SELECT DISTINCT l.to_flow_id FROM links l
+            JOIN nodes n ON n.id = l.parent_node_id
+            WHERE l.step_id = ? AND l.to_flow_id IS NOT NULL
+              AND LOWER(TRIM(n.name)) = LOWER(TRIM(?))
+        """, (step_id, new_status)).fetchall()
 
         reverse_links = cur.execute("""
-            SELECT DISTINCT step_id FROM links
-            WHERE to_flow_id = ?
-        """, (step_id,)).fetchall()
+            SELECT DISTINCT l.step_id FROM links l
+            JOIN nodes n ON n.id = l.child_node_id
+            WHERE l.to_flow_id = ?
+              AND LOWER(TRIM(n.name)) = LOWER(TRIM(?))
+        """, (step_id, new_status)).fetchall()
 
         # Flatten lists
         forward_ids = [r["to_flow_id"] for r in forward_links if r["to_flow_id"]]
