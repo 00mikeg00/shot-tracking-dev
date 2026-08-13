@@ -782,6 +782,7 @@ def get_approved_film_items():
         JOIN steps st ON st.id = sps.step_id
         JOIN film_crew fc ON fc.film_id = f.id
         WHERE fc.user_id = ?
+          AND f.archived = 0
           AND sps.status = 'Approved'
           AND st.name IN ('Thumbnails', 'FB Thumbnails')
         ORDER BY f.name, s.scene_number
@@ -913,6 +914,7 @@ def get_user_assets():
     JOIN nodes n ON asa.node_id = n.id
     JOIN films f ON a.film_id = f.id
     WHERE asa.assigned_user = ?
+      AND f.archived = 0
     ORDER BY asa.due_date IS NULL, asa.due_date
     """
 

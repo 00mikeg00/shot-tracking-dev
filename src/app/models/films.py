@@ -37,6 +37,7 @@ def get_all_films():
     LEFT JOIN semesters s ON f.semester_id = s.id
     LEFT JOIN users d ON f.director_id = d.id
     LEFT JOIN users u ON f.upm_id = u.id
+    WHERE f.archived = 0
     ORDER BY f.name ASC
     """
     conn = get_db()

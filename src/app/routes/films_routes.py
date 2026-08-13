@@ -4164,7 +4164,7 @@ def get_dashboard_data():
         SELECT DISTINCT f.id, f.name, f.step_id AS film_step_id
         FROM films f
         JOIN film_crew fc ON fc.film_id = f.id
-        WHERE fc.user_id = ?
+        WHERE fc.user_id = ? AND f.archived = 0
     """, (user_id,)).fetchall()
 
     result = []
