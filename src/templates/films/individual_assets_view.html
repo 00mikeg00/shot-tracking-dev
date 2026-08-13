@@ -82,16 +82,16 @@
         </div>
 
         <!-- ✅ Step grid scroll container -->
-        <div class="w-full overflow-x-auto">
+        <div class="w-full overflow-x-auto bg-gray-900">
             <!-- ✅ Step grid content -->
-            <div class="min-w-fit flex flex-col divide-y divide-gray-700">
+            <div class="min-w-fit flex flex-col divide-y divide-gray-700 bg-gray-900">
 
                 {% for asset in assets %}
                 <span style="display:none">delete-asset-form-{{ asset.id }}</span>
                 {% set asset_assignments = assignments | selectattr('asset_id', 'equalto', asset.id) | list %}
                 <div class="flex gap-4 items-start w-full px-4 py-4 bg-gray-900" data-asset-id="{{ asset.id }}">
-                    <!-- Left: Asset Name + Action Buttons -->
-                    <div class="min-w-[200px] sticky left-0 z-10 bg-gray-900 text-white font-semibold shrink-0 shadow-md">
+                    <!-- Left: Asset Name only -- this is the only thing that stays put on scroll -->
+                    <div class="min-w-[200px] sticky left-0 z-10 bg-gray-900 text-white font-semibold shrink-0 shadow-md self-stretch">
                         <label class="flex items-center gap-2">
                             <input type="checkbox" name="asset_ids" value="{{ asset.id }}" class="form-checkbox h-5 w-5">
                             <span>{{ asset.name }}</span>
@@ -101,36 +101,35 @@
                             <span title="File not found">❌</span>
                             {% endif %}
                         </label>
-                        <!-- inside your asset loop -->
-                        <div class="mt-2 flex gap-2">
-                            <button type="button" onclick="openEditAssetModal({{ asset.id }}, '{{ asset.name }}', '{{ asset.due_date }}')"
-                                class="bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded text-xs">
-                                ✏️ Edit
-                            </button>
-
-                            <button type="button" onclick="confirmDeleteAsset({{ asset.id }}, '{{ asset.name }}')"
-                                class="bg-red-700 hover:bg-red-800 text-white px-2 py-1 rounded text-xs">
-                                🗑️ Delete
-                            </button>
-                            <button type="button" class="bg-purple-700 hover:bg-purple-800 text-white px-2 py-1 rounded text-xs"
-                                onclick="openUploadDesignModal('{{ asset.name }}', '{{ asset.category }}', '{{ film.name }}')">
-                                ⬆️ Upload Design
-                            </button>
-                            
-                            <button type="button" class="bg-yellow-700 hover:bg-yellow-800 text-white px-2 py-1 rounded text-xs"
-                                onclick="window.location.href='/films/assets/view_designs/{{ film.name }}/{{ asset.category }}/{{ asset.name }}'">
-                                🖼️ View Designs
-                            </button>
-                            <button type="button" class="bg-green-700 hover:bg-green-800 text-white px-2 py-1 rounded text-xs"
-                                onclick="openAssetStepPicker({{ asset.id }}, '{{ asset.name }}')"
-                                title="Open a specific step's file in Maya, even if it's already approved/locked">
-                                🎬 Open
-                            </button>
-
-
-                        </div>
                     </div>
-                
+
+                    <!-- Action buttons -- scroll with the row, not frozen -->
+                    <div class="flex gap-2 shrink-0">
+                        <button type="button" onclick="openEditAssetModal({{ asset.id }}, '{{ asset.name }}', '{{ asset.due_date }}')"
+                            class="bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded text-xs">
+                            ✏️ Edit
+                        </button>
+
+                        <button type="button" onclick="confirmDeleteAsset({{ asset.id }}, '{{ asset.name }}')"
+                            class="bg-red-700 hover:bg-red-800 text-white px-2 py-1 rounded text-xs">
+                            🗑️ Delete
+                        </button>
+                        <button type="button" class="bg-purple-700 hover:bg-purple-800 text-white px-2 py-1 rounded text-xs"
+                            onclick="openUploadDesignModal('{{ asset.name }}', '{{ asset.category }}', '{{ film.name }}')">
+                            ⬆️ Upload Design
+                        </button>
+
+                        <button type="button" class="bg-yellow-700 hover:bg-yellow-800 text-white px-2 py-1 rounded text-xs"
+                            onclick="window.location.href='/films/assets/view_designs/{{ film.name }}/{{ asset.category }}/{{ asset.name }}'">
+                            🖼️ View Designs
+                        </button>
+                        <button type="button" class="bg-green-700 hover:bg-green-800 text-white px-2 py-1 rounded text-xs"
+                            onclick="openAssetStepPicker({{ asset.id }}, '{{ asset.name }}')"
+                            title="Open a specific step's file in Maya, even if it's already approved/locked">
+                            🎬 Open
+                        </button>
+                    </div>
+
                     <!-- Right: Steps -->
                     <div class="flex gap-4">
                         {% for assignment in asset_assignments %}
