@@ -736,15 +736,21 @@ def shot_lighting_context():
         WHERE sl.entity_type = 'shot_step' AND sl.entity_id = ? AND sl.step_id = ?
     """, (shot_id, lighting_step["id"])).fetchone()
 
-    # Lighting rig: an external, reusable asset (like a character rig),
-    # referenced in rather than copied -- so, unlike Layout's copy-in-only
-    # flow, the Maya module needs this asset data from the DB, same as
-    # scene-Layout's "assets" field.
+    # Light Rigs configured for THIS SHOT's scene (Edit Layout Config
+    # editor, scene_assets table) -- same scoping as Animation's
+    # character_rigs, not every Light Rigs asset in the whole film.
+    # CapstoneLighting.py resolves the actual Shot-Ready (Rig Creation
+    # -tagged) file itself from the asset name/film, same self-contained
+    # pattern as CapstoneAnimation.py resolving Character/Rigs -- only the
+    # name is needed here, not a file_path (the film's asset.file_path was
+    # whatever was last saved, not necessarily the shot-ready version).
     light_rigs = db.execute("""
-        SELECT name, file_path FROM assets
-        WHERE film_id = ? AND category = 'Light Rigs'
-        ORDER BY name
-    """, (shot["film_id"],)).fetchall()
+        SELECT a.name
+        FROM scene_assets sa
+        JOIN assets a ON a.id = sa.asset_id
+        WHERE sa.scene_id = ? AND sa.asset_type = 'Light Rigs'
+        ORDER BY a.name
+    """, (shot["scene_id"],)).fetchall()
 
     return jsonify({
         "shot_id": shot_id,
@@ -758,7 +764,7 @@ def shot_lighting_context():
         "locked": bool(lighting_lock["locked"]) if lighting_lock else False,
         "locked_by": lighting_lock["locked_by"] if lighting_lock else None,
         "locked_at": lighting_lock["locked_at"] if lighting_lock else None,
-        "light_rigs": [{"name": r["name"], "file_path": r["file_path"]} for r in light_rigs],
+        "light_rigs": [{"name": r["name"]} for r in light_rigs],
         "user": {
             "id": user["id"],
             "login_name": user["login_name"],

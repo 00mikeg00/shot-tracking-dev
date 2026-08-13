@@ -25,6 +25,24 @@ FILMS_ROOT    = r"\\GAAAP1PRD01W\Films"
 
 STEP_CODE          = "LGT"
 ANIMATION_STEP_CODE = "ANIM"
+LGTRIG_STEP_CODE    = "LGTRIG"
+
+# Mirrors CapstoneAnimation.py -- duplicated rather than imported, deploy/
+# tools are each self-contained. Used to resolve the Shot-Ready (Rig
+# Creation-tagged) file for each of the scene's configured Light Rigs
+# assets, the same "look it up on disk by name" pattern Animation uses for
+# Character/Rigs, instead of trusting whatever assets.file_path happens to
+# hold.
+ASSET_ROOT = r"\\GAAAP1PRD01W\Films"
+CATEGORY_FOLDER_MAP = {
+    "Sets": "Sets",
+    "Character/Rigs": "Rigs",
+    "Rigs": "Rigs",
+    "Props - 3D": "Props_-_3D",
+    "Props - 2D": "Props_-_2D",
+    "Light Rigs": "LightRigs",
+    "BGs": "BGs",
+}
 
 _log_file = None
 
@@ -97,6 +115,33 @@ def find_latest_version(directory, base_name):
     return highest, highest_path
 
 
+def get_asset_production_dir(film_name, category, asset_name):
+    folder = CATEGORY_FOLDER_MAP.get(category)
+    if not folder:
+        return None
+    return os.path.join(ASSET_ROOT, film_name, "Assets", folder, asset_name)
+
+
+def find_latest_light_rig_version(asset_dir, asset_name):
+    """Highest version among files tagged _LGTRIG_ -- the Shot-Ready file, same idea as CapstoneAnimation's find_latest_rig_version()."""
+    safe_name = re.escape(asset_name).replace(r"\ ", r"[ _]")
+    pattern = re.compile(rf"^{safe_name}_{LGTRIG_STEP_CODE}_.*?_v(\d+)\.(ma|mb)$", re.IGNORECASE)
+
+    highest = 0
+    highest_path = None
+    try:
+        for entry in os.listdir(asset_dir):
+            match = pattern.match(entry)
+            if match:
+                version = int(match.group(1))
+                if version > highest:
+                    highest = version
+                    highest_path = os.path.join(asset_dir, entry)
+    except OSError as e:
+        log(f"WARNING: Could not list {asset_dir} for light rig version scan: {e}")
+    return highest, highest_path
+
+
 def find_latest_animation_any_user(directory, film_name, scene_number, shot_number):
     """Same "pick globally highest version" reasoning as the Layout/Animation copy-in lookups."""
     prefix = f"{film_name}_{pad3(scene_number)}_{pad3(shot_number)}_{ANIMATION_STEP_CODE}_"
@@ -136,20 +181,64 @@ def unique_namespace(base, used):
     return ns
 
 
-def reference_light_rigs(light_rigs):
+def get_referenced_asset_dirs():
+    """Same as CapstoneAnimation.get_referenced_asset_dirs() -- directories of every file currently referenced into the open scene."""
+    try:
+        paths = cmds.file(query=True, reference=True) or []
+    except RuntimeError:
+        paths = []
+    return {os.path.normcase(os.path.normpath(os.path.dirname(p))) for p in paths}
+
+
+def _rig_already_present(name, referenced_dirs, asset_dir_norm):
+    """Same as CapstoneAnimation._rig_already_present() -- live-reference check plus a namespace-prefix fallback."""
+    if asset_dir_norm in referenced_dirs:
+        return True
+    prefix = (sanitize_namespace(name) + "_LGTRIG_").lower()
+    try:
+        all_namespaces = cmds.namespaceInfo(listOnlyNamespaces=True, recurse=True) or []
+    except RuntimeError:
+        all_namespaces = []
+    return any(ns.lower().startswith(prefix) for ns in all_namespaces)
+
+
+def reference_light_rigs(light_rigs, film_name, skip_already_referenced=False):
     """
-    Light rigs come in via Maya reference, not copy-in — per the design
-    doc, a light rig is an external, reusable asset like a character rig,
-    not scene content being modified per-shot. Same referencing pattern as
-    Assignments.reference_rigs()/CapstoneLayout.reference_assets().
+    References the Shot-Ready (highest _LGTRIG_-tagged) file for each of
+    the scene's configured Light Rigs assets, resolved from disk by name --
+    same pattern as CapstoneAnimation.reference_character_rigs(), not the
+    asset's raw (possibly stale/WIP) assets.file_path. If a light rig
+    hasn't reached Rig Creation yet, it's skipped (logged) rather than
+    referencing nothing usable.
+
+    skip_already_referenced=True makes this safe to call on every open
+    (fresh creation AND reopen): rigs already in the scene are left alone,
+    so only newly Shot-Ready assets get added on a later reopen, the same
+    backfill behavior Animation has for Character/Rigs.
     """
     used_namespaces = set()
+    referenced_dirs = get_referenced_asset_dirs() if skip_already_referenced else set()
+
     for rig in light_rigs:
-        path = rig.get("file_path") if isinstance(rig, dict) else rig
         name = rig.get("name") if isinstance(rig, dict) else rig
-        if not path:
-            log(f"WARNING: No file_path for light rig '{name}'; skipping")
+        if not name:
             continue
+
+        asset_dir = get_asset_production_dir(film_name, "Light Rigs", name)
+        if not asset_dir:
+            log(f"ERROR: No folder mapping for Light Rigs; skipping '{name}'")
+            continue
+
+        if skip_already_referenced and _rig_already_present(
+            name, referenced_dirs, os.path.normcase(os.path.normpath(asset_dir))
+        ):
+            continue
+
+        version, path = find_latest_light_rig_version(asset_dir, name)
+        if not path:
+            log(f"WARNING: No Shot-Ready (Rig Creation) file exists yet for light rig '{name}'; skipping")
+            continue
+
         if not os.path.isfile(path):
             log(f"ERROR: Light rig not found on disk: {path}")
             continue
@@ -158,7 +247,7 @@ def reference_light_rigs(light_rigs):
         ns = unique_namespace(base, used_namespaces)
 
         cmds.file(path, reference=True, namespace=ns, ignoreVersion=True)
-        log(f"Referenced light rig: {path} (namespace={ns})")
+        log(f"Referenced Shot-Ready light rig: {path} (namespace={ns}, v{version})")
 
 
 def open_existing_scene(path):
@@ -233,6 +322,7 @@ def run_shot(login_name=None, shot_id=None):
             open_existing_scene(existing_path)
             stamp_scene_metadata(film_name, scene_number, shot_number, shot_id,
                                   context["scene_id"], display_name)
+            reference_light_rigs(context.get("light_rigs", []), film_name, skip_already_referenced=True)
             log(f"Opened existing Lighting (v{existing_version}): {existing_path}")
             log("CapstoneLighting.run_shot() completed successfully")
             return True
@@ -252,7 +342,7 @@ def run_shot(login_name=None, shot_id=None):
         cmds.file(animation_path, i=True, ignoreVersion=True)
         log(f"Copied in Animation: {animation_path}")
 
-        reference_light_rigs(context.get("light_rigs", []))
+        reference_light_rigs(context.get("light_rigs", []), film_name, skip_already_referenced=True)
 
         stamp_scene_metadata(film_name, scene_number, shot_number, shot_id,
                               context["scene_id"], display_name)
