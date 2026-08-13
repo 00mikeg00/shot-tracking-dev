@@ -56,13 +56,14 @@ CATEGORY_FOLDER_MAP = {
 }
 
 # Steps that actually get their own Maya scene file, matching the
-# step_codes rows added by migrate_add_asset_step_codes.py. Design and
+# step_codes rows added by migrate_add_asset_step_codes.py (Light Rigs'
+# "Rig Creation" added separately, as LGTRIG -- "RIG" was already taken by
+# Character/Rigs' "Rigging" and step_codes.step_code is UNIQUE). Design and
 # Shot Ready aren't file-producing steps (concept art / a final gate), and
 # FB-*/Grade-* pseudo-steps are excluded server-side already. A category
-# whose steps don't include any of these (e.g. Props - 2D, or Light Rigs'
-# "Rig Creation" step which has no code yet) simply has nothing to open --
-# see run()'s current_step is None branch.
-FILE_VERSIONED_STEP_CODES = {"MOD", "TEX", "RIG"}
+# whose steps don't include any of these (e.g. Props - 2D) simply has
+# nothing to open -- see run()'s current_step is None branch.
+FILE_VERSIONED_STEP_CODES = {"MOD", "TEX", "RIG", "LGTRIG"}
 
 _log_file = None
 
@@ -209,6 +210,7 @@ STEP_NAME_TO_CODE = {
     "Modeling": "MOD",
     "Texture/Surface": "TEX",
     "Rigging": "RIG",
+    "Rig Creation": "LGTRIG",
 }
 
 

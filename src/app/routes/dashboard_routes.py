@@ -859,7 +859,7 @@ def _resolve_active_asset_steps(conn, asset_ids):
         LEFT JOIN step_locks sl
             ON sl.entity_type = 'asset_step' AND sl.entity_id = asa.asset_id AND sl.step_id = s.id
         WHERE asa.asset_id IN ({placeholders})
-          AND sc.step_code IN ('MOD', 'TEX', 'RIG')
+          AND sc.step_code IN ('MOD', 'TEX', 'RIG', 'LGTRIG')
     """, asset_ids).fetchall()
 
     by_asset = {}

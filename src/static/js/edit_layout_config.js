@@ -24,6 +24,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.unlock-shot-framing-btn').forEach((btn) => {
     btn.addEventListener('click', () => unlockShotCameraFraming(btn));
   });
+
+  document.querySelectorAll('.frame-count-input').forEach((input) => {
+    input.addEventListener('change', () => saveFrameCount(input));
+  });
 });
 
 function saveSceneAssets() {
@@ -166,5 +170,34 @@ function saveCameraFraming(select) {
     })
     .catch(() => {
       Swal.fire('Error', 'Network error while saving Camera Framing.', 'error');
+    });
+}
+
+function saveFrameCount(input) {
+  const shotId = input.dataset.shotId;
+  const raw = input.value.trim();
+  const frame_count = raw === '' ? null : parseInt(raw, 10);
+
+  fetch(`/films/${window.filmId}/scenes/${window.sceneId}/layout-config/shots/${shotId}/frame-count`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ frame_count })
+  })
+    .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+    .then(({ ok, data }) => {
+      if (!ok) {
+        Swal.fire('Error', data.error || 'Could not save Frame Count.', 'error');
+        return;
+      }
+      Swal.fire({
+        icon: 'success',
+        title: 'Saved',
+        text: data.frame_count ? `Frame Count set to ${data.frame_count}.` : 'Frame Count cleared.',
+        timer: 1200,
+        showConfirmButton: false
+      });
+    })
+    .catch(() => {
+      Swal.fire('Error', 'Network error while saving Frame Count.', 'error');
     });
 }

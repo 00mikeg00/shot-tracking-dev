@@ -14,7 +14,8 @@
 <p class="text-gray-300 text-sm mb-6">
   Coordinator-authored only — artists never edit this. Scene-level asset fields lock permanently once this
   scene's Layout is marked done. Each shot's Camera Framing locks individually once that shot's own Layout
-  is approved — locking is per-shot, not all-or-nothing for the scene.
+  is approved — locking is per-shot, not all-or-nothing for the scene. Frame Count never locks — it can be
+  revised any time, and the current value is re-applied to that shot's Maya scene every time it's opened.
 </p>
 
 <!-- Scene-level asset fields -->
@@ -23,7 +24,7 @@
     <h3 class="text-white font-semibold text-lg">Scene Assets</h3>
     {% if scene_locked %}
     <div class="flex items-center gap-2">
-      <span class="bg-gray-700 text-gray-300 px-3 py-1 rounded text-sm">🔒 Locked — scene Layout is done</span>
+      <span class="bg-gray-700 text-gray-300 px-3 py-1 rounded text-sm">🔒 Locked — LAYOUT SET Approved</span>
       <button type="button" id="unlock-scene-assets-btn"
         class="bg-orange-700 hover:bg-orange-600 text-white px-3 py-1 rounded text-sm">
         Unlock
@@ -79,6 +80,7 @@
       <tr>
         <th class="py-2 pr-4">Shot</th>
         <th class="py-2 pr-4">Camera Framing</th>
+        <th class="py-2 pr-4">Frame Count</th>
         <th class="py-2 pr-4">Status</th>
       </tr>
     </thead>
@@ -94,6 +96,13 @@
             <option value="{{ option }}" {% if shot.camera_framing==option %}selected{% endif %}>{{ option }}</option>
             {% endfor %}
           </select>
+        </td>
+        <td class="py-2 pr-4">
+          <input type="number" min="1" step="1"
+            class="frame-count-input bg-white text-black text-sm rounded px-2 py-1 w-20"
+            data-shot-id="{{ shot.id }}"
+            value="{{ shot.frame_count if shot.frame_count is not none else '' }}"
+            placeholder="—">
         </td>
         <td class="py-2 pr-4">
           {% if shot.layout_locked %}

@@ -33,6 +33,18 @@
             </div>
 
             <div class="mt-4">
+                <label for="aspect_ratio" class="block text-white font-medium">Render Aspect Ratio:</label>
+                <select id="aspect_ratio" name="aspect_ratio"
+                    class="w-full border text-gray-900 bg-white rounded-lg p-2" required>
+                    {% for preset in aspect_ratio_presets %}
+                    <option value="{{ preset.value }}" {% if preset.value==film.aspect_ratio %}selected{% endif %}>
+                        {{ preset.label }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="mt-4">
                 <label for="step_id" class="block text-white font-medium">Overall Film Workflow:</label>
                 <select id="step_id" name="step_id" class="w-full border text-gray-900 bg-white rounded-lg p-2"
                     required>

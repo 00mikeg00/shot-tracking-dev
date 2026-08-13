@@ -103,11 +103,32 @@ def get_shot_layout_context(shot_id, login_name):
         return None
 
 
+def get_shot_blocking_context(shot_id, login_name):
+    """
+    Calls Shot Tracker's capstone API and returns the shot-Blocking
+    context dict (film/scene/shot identity, whether this shot's own
+    Layout is approved yet, current lock state) for the Maya-side
+    capstone flow.
+    """
+    try:
+        url = f"{SHOT_TRACKER_URL}/classes/api/launcher/capstone/shot-blocking/context"
+        r = requests.get(url, params={
+            "shot_id":    shot_id,
+            "login_name": login_name
+        }, timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        log(f"ERROR fetching shot blocking context: {e}")
+        return None
+
+
 def get_shot_animation_context(shot_id, login_name):
     """
     Calls Shot Tracker's capstone API and returns the shot-Animation
-    context dict (film/scene/shot identity, whether Layout is approved
-    yet, current lock state) for the Maya-side capstone flow.
+    context dict (film/scene/shot identity, whether this shot's own
+    Blocking is approved yet, current lock state) for the Maya-side
+    capstone flow.
     """
     try:
         url = f"{SHOT_TRACKER_URL}/classes/api/launcher/capstone/shot-animation/context"
@@ -221,6 +242,25 @@ def write_shot_layout_session(context):
         json.dump(context, f, indent=2)
 
     log(f"Shot layout session context written: {session_file}")
+    return session_file
+
+
+def write_shot_blocking_session(context):
+    r"""
+    Writes the shot-Blocking context JSON to
+    C:\Cincy\sessions\{login_name}_shot_blocking_context.json -- distinct
+    from every other session file so a student's assignment/capstone
+    sessions never clobber each other on a shared lab machine.
+    """
+    login_name   = context["user"]["login_name"]
+    session_file = os.path.join(SESSIONS_PATH, f"{login_name}_shot_blocking_context.json")
+
+    os.makedirs(SESSIONS_PATH, exist_ok=True)
+
+    with open(session_file, "w", encoding="utf-8") as f:
+        json.dump(context, f, indent=2)
+
+    log(f"Shot blocking session context written: {session_file}")
     return session_file
 
 
@@ -382,6 +422,36 @@ def launch_maya_shot_layout(login_name, shot_id):
     subprocess.Popen([MAYA_EXE, "-command", mel_command])
 
 
+def launch_maya_shot_blocking(login_name, shot_id):
+    """
+    Launches Maya and runs CapstoneBlocking.run_shot() for one shot's
+    Blocking, same evalDeferred idiom as the other launch_maya_* helpers.
+    """
+    log(f"Launching Maya (shot Blocking): {MAYA_EXE}")
+
+    if not _SAFE_LOGIN_NAME.match(login_name or ""):
+        log(f"ERROR: login_name '{login_name}' contains unsafe characters; launching Maya clean instead")
+        subprocess.Popen([MAYA_EXE])
+        return
+
+    try:
+        shot_id_arg = str(int(shot_id))
+    except (TypeError, ValueError):
+        log(f"ERROR: shot_id '{shot_id}' is not a valid integer; launching Maya clean instead")
+        subprocess.Popen([MAYA_EXE])
+        return
+
+    python_code = (
+        "import sys; "
+        "sys.path.insert(0, 'C:/Cincy/scripts'); "
+        "import CapstoneBlocking; "
+        f"CapstoneBlocking.run_shot(login_name='{login_name}', shot_id={shot_id_arg})"
+    )
+    mel_command = f'evalDeferred("python(\\"{python_code}\\")")'
+
+    subprocess.Popen([MAYA_EXE, "-command", mel_command])
+
+
 def launch_maya_shot_animation(login_name, shot_id):
     """
     Launches Maya and runs CapstoneAnimation.run_shot() for one shot's
@@ -503,6 +573,10 @@ def main():
         _main_shot_layout(params)
         return
 
+    if action == "shot_blocking":
+        _main_shot_blocking(params)
+        return
+
     if action == "shot_animation":
         _main_shot_animation(params)
         return
@@ -612,6 +686,34 @@ def _main_shot_layout(params):
 
     launch_maya_shot_layout(context["user"]["login_name"], context["shot_id"])
     log("Maya launch initiated (shot layout)")
+
+
+def _main_shot_blocking(params):
+    """
+    shottracker://open?action=shot_blocking&shot_id=373&login_name=bariann
+    """
+    shot_id    = params.get("shot_id")
+    login_name = params.get("login_name")
+
+    if not shot_id or not login_name:
+        log("ERROR: Missing shot_id or login_name in URI")
+        sys.exit(1)
+
+    log(f"action=shot_blocking shot_id={shot_id} login_name={login_name}")
+
+    context = get_shot_blocking_context(shot_id, login_name)
+    if not context:
+        log("ERROR: Could not get shot blocking context from Shot Tracker")
+        sys.exit(1)
+
+    log(f"Context received for user: {context['user']['display_name']}")
+    log(f"Film: {context['film_name']} Scene: {context['scene_number']} Shot: {context['shot_number']}")
+
+    session_file = write_shot_blocking_session(context)
+    log(f"Shot blocking session ready: {session_file}")
+
+    launch_maya_shot_blocking(context["user"]["login_name"], context["shot_id"])
+    log("Maya launch initiated (shot blocking)")
 
 
 def _main_shot_animation(params):

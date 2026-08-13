@@ -1,4 +1,5 @@
 ﻿from app.database.db import get_db
+from app.utils.render_resolution import DEFAULT_ASPECT_RATIO
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -66,8 +67,8 @@ def add_film(data):
     conn = get_db()
     cursor = conn.execute(
         """
-        INSERT INTO films (name, description, semester_id, director_id, upm_id, step_id)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO films (name, description, semester_id, director_id, upm_id, step_id, aspect_ratio)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             data["name"],
@@ -75,11 +76,12 @@ def add_film(data):
             data.get("semester_id"),
             data.get("director_id"),
             data.get("upm_id"),
-            data.get("step_id")
+            data.get("step_id"),
+            data.get("aspect_ratio") or DEFAULT_ASPECT_RATIO
         )
     )
     conn.commit()
-    
+
     # [OK] Return the generated film ID
     return cursor.lastrowid
 
@@ -89,7 +91,7 @@ def update_film(film_id, data):
         conn.execute(
             """
             UPDATE films
-            SET name = ?, description = ?, semester_id = ?, director_id = ?, upm_id = ?
+            SET name = ?, description = ?, semester_id = ?, director_id = ?, upm_id = ?, aspect_ratio = ?
             WHERE id = ?
             """,
             (
@@ -98,6 +100,7 @@ def update_film(film_id, data):
                 data.get("semester_id"),
                 data.get("director_id"),
                 data.get("upm_id"),
+                data.get("aspect_ratio") or DEFAULT_ASPECT_RATIO,
                 film_id
             )
         )

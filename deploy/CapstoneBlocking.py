@@ -1,23 +1,24 @@
-# CapstoneAnimation.py
-# UC GAA Shot Tracker — silent Maya shot Animation setup for the capstone
-# film pipeline. Invoked by launcher.py (action=shot_animation) after it
-# has written {login_name}_shot_animation_context.json. Same silent
-# contract as the other Capstone*.py modules: no dialogs, no prompts,
-# failures logged and returned as False.
+# CapstoneBlocking.py
+# UC GAA Shot Tracker — silent Maya shot Blocking setup for the capstone
+# film pipeline. Invoked by launcher.py (action=shot_blocking) after it has
+# written {login_name}_shot_blocking_context.json. Same silent contract as
+# the other Capstone*.py modules: no dialogs, no prompts, failures logged
+# and returned as False.
 #
-# Animation is its own top-level workflow step, coming after Blocking
-# (Layout -> Blocking -> Animation -> Lighting), NOT a container for
-# self-locked Blocking/Blocking Plus/Polish sub-steps the way an earlier
-# iteration of this pipeline had it -- that model has been dropped per
-# explicit product direction (no GAA-Save self-lock flow for this stage).
-# Works exactly like CapstoneBlocking.py/CapstoneLighting.py: single
-# continuously versioned file, gated on the PRIOR step's per-shot
-# approval, coordinator approves this shot individually.
+# Blocking sits between Layout and Animation as its own top-level workflow
+# step (Layout -> Blocking -> Animation -> Lighting), NOT as a self-locked
+# sub-step of Animation the way an earlier iteration of this pipeline had
+# it (Blocking/Blocking Plus/Polish inside CapstoneAnimation.py) -- that
+# model has been dropped per explicit product direction. Blocking now works
+# exactly like Layout's shot-level flow and Lighting: single continuously
+# versioned file, gated on the PRIOR step's per-shot approval, coordinator
+# approves this shot individually (matches Layout's shape, not a scene-wide
+# or self-lock mechanism).
 #
-# Filename convention: {film}_{scene:3d}_{shot:3d}_ANIM_{user}_v{n}.mb --
-# distinct step code from Layout (_LAY_) and Blocking (_BL_) by
-# construction, so an Animation session can never save over either
-# regardless of what's open in Maya.
+# Filename convention: {film}_{scene:3d}_{shot:3d}_BL_{user}_v{n}.mb --
+# distinct step code from Layout (_LAY_) and Animation (_ANIM_) by
+# construction, so a Blocking session can never save over a Layout or
+# Animation file regardless of what's open in Maya.
 
 import os
 import re
@@ -33,13 +34,13 @@ SESSIONS_PATH = r"C:\Cincy\sessions"
 LOG_DIR       = r"C:\Cincy\logs"
 FILMS_ROOT    = r"\\GAAAP1PRD01W\Films"
 
-STEP_CODE         = "ANIM"
-BLOCKING_STEP_CODE = "BL"
+STEP_CODE        = "BL"
+LAYOUT_STEP_CODE = "LAY"
 
-# Mirrors CapstoneBlocking.py -- duplicated rather than imported, deploy/
-# tools are each self-contained. Used to reference the Shot-Ready rig for
-# each of the scene's configured Character/Rigs assets, alongside whatever
-# the copied-in Blocking file already has.
+# Mirrors CapstoneLayout.py/CapstoneAnimation.py -- duplicated rather than
+# imported, deploy/ tools are each self-contained. Used to reference the
+# Shot-Ready rig for each of the scene's configured Character/Rigs assets,
+# same as Animation's own (now removed) rig-referencing did.
 ASSET_ROOT = r"\\GAAAP1PRD01W\Films"
 CATEGORY_FOLDER_MAP = {
     "Sets": "Sets",
@@ -59,7 +60,7 @@ def _init_log():
     global _log_file
     os.makedirs(LOG_DIR, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    _log_file = os.path.join(LOG_DIR, f"capstone_animation_{timestamp}.log")
+    _log_file = os.path.join(LOG_DIR, f"capstone_blocking_{timestamp}.log")
 
 
 def log(message):
@@ -77,15 +78,15 @@ def log(message):
 
 # ── Session context ───────────────────────────────────────────
 def load_session(login_name):
-    session_file = os.path.join(SESSIONS_PATH, f"{login_name}_shot_animation_context.json")
+    session_file = os.path.join(SESSIONS_PATH, f"{login_name}_shot_blocking_context.json")
     if not os.path.isfile(session_file):
-        log(f"ERROR: Shot animation session context not found: {session_file}")
+        log(f"ERROR: Shot blocking session context not found: {session_file}")
         return None
     try:
         with open(session_file, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        log(f"ERROR: Could not read shot animation session context {session_file}: {e}")
+        log(f"ERROR: Could not read shot blocking session context {session_file}: {e}")
         return None
 
 
@@ -99,8 +100,8 @@ def shot_dir(film_name, scene_number, shot_number):
 
 
 def build_base_name(film_name, scene_number, shot_number, display_name):
-    # STEP_CODE ("ANIM") is always embedded here, so this name can never
-    # collide with a "_LAY_" or "_BL_" filename in the same folder.
+    # STEP_CODE ("BL") is always embedded here, so this name can never
+    # collide with a "_LAY_" or "_ANIM_" filename in the same folder.
     return f"{film_name}_{pad3(scene_number)}_{pad3(shot_number)}_{STEP_CODE}_{display_name}"
 
 
@@ -122,13 +123,13 @@ def find_latest_version(directory, base_name):
     return highest, highest_path
 
 
-def find_latest_blocking_any_user(directory, film_name, scene_number, shot_number):
+def find_latest_layout_any_user(directory, film_name, scene_number, shot_number):
     """
-    Highest {film}_{scene}_{shot}_BL_*_v{N}.mb in the shot folder -- same
-    "pick globally highest version, not scoped to a specific user"
-    reasoning as CapstoneBlocking's own Layout lookup.
+    Highest {film}_{scene}_{shot}_LAY_*_v{N}.mb in the shot folder --
+    same "pick globally highest version, not scoped to a specific user"
+    reasoning as CapstoneLayout.find_latest_version_any_user().
     """
-    prefix = f"{film_name}_{pad3(scene_number)}_{pad3(shot_number)}_{BLOCKING_STEP_CODE}_"
+    prefix = f"{film_name}_{pad3(scene_number)}_{pad3(shot_number)}_{LAYOUT_STEP_CODE}_"
     pattern = re.compile(rf"^{re.escape(prefix)}.+_v(\d+)\.mb$", re.IGNORECASE)
     highest = 0
     highest_path = None
@@ -141,7 +142,7 @@ def find_latest_blocking_any_user(directory, film_name, scene_number, shot_numbe
                     highest = version
                     highest_path = os.path.join(directory, entry)
     except OSError as e:
-        log(f"WARNING: Could not list {directory} for blocking scan: {e}")
+        log(f"WARNING: Could not list {directory} for shot layout scan: {e}")
     return highest, highest_path
 
 
@@ -192,61 +193,16 @@ def unique_namespace(base, used):
     return ns
 
 
-def get_referenced_asset_dirs():
-    """
-    Directories (normalized) of every file currently referenced into the
-    open scene. Used to tell whether a given Character/Rigs asset already
-    has a reference in the scene, regardless of which version was
-    referenced -- so re-running reference_character_rigs() on an
-    already-set-up scene doesn't create duplicate references.
-    """
-    try:
-        paths = cmds.file(query=True, reference=True) or []
-    except RuntimeError:
-        paths = []
-    return {os.path.normcase(os.path.normpath(os.path.dirname(p))) for p in paths}
-
-
-def _rig_already_present(name, referenced_dirs, asset_dir_norm):
-    """
-    True if this rig is already in the scene, checked two ways: as a live
-    reference (asset_dir_norm in referenced_dirs), or by namespace prefix
-    (sanitize_namespace(asset_name) + "_RIG_"). Now that Blocking's file
-    is copied to the Animation path and opened (not imported -- see
-    run_shot()), its rig reference should always show up as a live
-    reference; the namespace check is a defensive fallback kept from when
-    this module used cmds.file(i=True), which silently flattened
-    references into embedded geometry that the reference-only check
-    couldn't see.
-    """
-    if asset_dir_norm in referenced_dirs:
-        return True
-    prefix = (sanitize_namespace(name) + "_RIG_").lower()
-    try:
-        all_namespaces = cmds.namespaceInfo(listOnlyNamespaces=True, recurse=True) or []
-    except RuntimeError:
-        all_namespaces = []
-    return any(ns.lower().startswith(prefix) for ns in all_namespaces)
-
-
-def reference_character_rigs(character_rigs, film_name, skip_already_referenced=False):
+def reference_character_rigs(character_rigs, film_name):
     """
     References the Shot-Ready (highest _RIG_-tagged) file for each of the
     scene's configured Character/Rigs assets, ADDITIONALLY to whatever the
-    copied-in Blocking file already has -- both coexist by design, not a
-    swap. If an asset hasn't reached Rigging yet, it's skipped (logged)
-    rather than referencing a Modeling/Texture-Surface WIP file.
-
-    skip_already_referenced=True makes this safe to call whenever the rig
-    might already be present -- every re-open of an existing Animation
-    file, AND the very first creation (Blocking's already-posed rig comes
-    along with the copy-in import, see _rig_already_present()): assets
-    already in the scene are left alone, so only newly Shot-Ready assets
-    get added.
+    copied-in Layout already has (the Proxy) -- both coexist by design, not
+    a swap. If an asset hasn't reached Rigging yet, it's skipped (logged)
+    rather than referencing a Modeling/Texture-Surface WIP file. Same
+    pattern as the (now removed) Animation rig-referencing.
     """
     used_namespaces = set()
-    referenced_dirs = get_referenced_asset_dirs() if skip_already_referenced else set()
-
     for rig in character_rigs:
         name = rig.get("name") if isinstance(rig, dict) else rig
         if not name:
@@ -255,11 +211,6 @@ def reference_character_rigs(character_rigs, film_name, skip_already_referenced=
         asset_dir = get_asset_production_dir(film_name, "Character/Rigs", name)
         if not asset_dir:
             log(f"ERROR: No folder mapping for Character/Rigs; skipping '{name}'")
-            continue
-
-        if skip_already_referenced and _rig_already_present(
-            name, referenced_dirs, os.path.normcase(os.path.normpath(asset_dir))
-        ):
             continue
 
         version, path = find_latest_rig_version(asset_dir, name)
@@ -291,7 +242,7 @@ def stamp_scene_metadata(film_name, scene_number, shot_number, shot_id, scene_id
     cmds.fileInfo("GAA_film", film_name)
     cmds.fileInfo("GAA_scene_number", str(scene_number))
     cmds.fileInfo("GAA_shot_number", str(shot_number))
-    cmds.fileInfo("GAA_step", "Animation")
+    cmds.fileInfo("GAA_step", "Blocking")
     cmds.fileInfo("GAA_display_name", display_name)
     if scene_id is not None:
         cmds.fileInfo("GAA_scene_id", str(scene_id))
@@ -336,8 +287,8 @@ def set_shot_frame_range(frame_count):
 def save_scene(save_path):
     """
     Explicit type="mayaBinary" — see CapstoneLayout.save_scene() for why.
-    Path/basename always contain "_ANIM_" by construction (build_base_name),
-    so this can never write to a "_LAY_"/"_BL_" filename even if something
+    Path/basename always contain "_BL_" by construction (build_base_name),
+    so this can never write to a "_LAY_" filename even if something
     upstream passed a bad path.
     """
     save_dir = os.path.dirname(save_path)
@@ -347,20 +298,19 @@ def save_scene(save_path):
     log(f"Scene saved: {save_path}")
 
 
-# ── Main: shot Animation ──────────────────────────────────────
+# ── Main: shot Blocking ────────────────────────────────────────
 def run_shot(login_name=None, shot_id=None):
     """
-    Per-shot, created once this shot's own Blocking is Approved or CUT (see
-    "shot_blocking_approved" in the session context -- gate is per-shot).
-    First open copies in the shot's own approved Blocking file, then
-    references in any newly Shot-Ready Character Rigs. Subsequent opens
-    just open the latest existing Animation file, backfilling any rigs
-    that became Shot-Ready since the last open, same shape as the sub-step
-    version this replaced.
+    Per-shot, created once this shot's own Layout is Approved or CUT (see
+    "shot_layout_approved" in the session context -- gate is per-shot, not
+    the scene-wide Layout Set flag). First open copies in the shot's own
+    approved Layout, then references in the film's configured Character
+    Rigs. Subsequent opens just open the latest existing Blocking file,
+    same shape as CapstoneLighting.run_shot().
     """
     _init_log()
     log("=" * 50)
-    log("CapstoneAnimation.run_shot() started")
+    log("CapstoneBlocking.run_shot() started")
 
     login_name = login_name or getpass.getuser()
     log(f"login_name={login_name} shot_id={shot_id}")
@@ -388,45 +338,37 @@ def run_shot(login_name=None, shot_id=None):
             stamp_scene_metadata(film_name, scene_number, shot_number, shot_id,
                                   context["scene_id"], display_name)
             stamp_render_dimensions(context)
-            reference_character_rigs(character_rigs, film_name, skip_already_referenced=True)
             set_shot_frame_range(frame_count)
-            log(f"Opened existing Animation (v{existing_version}): {existing_path}")
-            log("CapstoneAnimation.run_shot() completed successfully")
+            log(f"Opened existing Blocking (v{existing_version}): {existing_path}")
+            log("CapstoneBlocking.run_shot() completed successfully")
             return True
 
-        if not context.get("shot_blocking_approved"):
-            log("ERROR: This shot's Blocking is not approved (or CUT) yet; Animation cannot be created")
-            cmds.warning("This shot's Blocking hasn't been approved yet — Animation can't start until it is.")
+        if not context.get("shot_layout_approved"):
+            log("ERROR: This shot's Layout is not approved (or CUT) yet; Blocking cannot be created")
+            cmds.warning("This shot's Layout hasn't been approved yet — Blocking can't start until it is.")
             return False
 
-        _, blocking_path = find_latest_blocking_any_user(directory, film_name, scene_number, shot_number)
-        if not blocking_path:
-            log(f"ERROR: shot_blocking_approved is true but no Blocking file found in {directory}")
-            cmds.warning("This shot's Blocking is approved, but no Blocking file could be found on disk for it. Contact your instructor.")
+        _, layout_path = find_latest_layout_any_user(directory, film_name, scene_number, shot_number)
+        if not layout_path:
+            log(f"ERROR: shot_layout_approved is true but no Layout file found in {directory}")
+            cmds.warning("This shot's Layout is approved, but no Layout file could be found on disk for it. Contact your instructor.")
             return False
 
-        # OS-level file copy, not cmds.file(i=True) -- confirmed by an
-        # empty Reference Editor after import that Maya flattens nested
-        # references into embedded geometry when importing a file into an
-        # already-open scene (that's what produced the 21MB file: real
-        # geometry baked in instead of a lightweight reference edge).
-        # Opening a file with references, unlike importing one, preserves
-        # them correctly -- same open_existing_scene() already relied on
-        # everywhere else in these modules -- so copying Blocking's file
-        # to the Animation path and opening THAT keeps every reference
-        # (rig included) exactly as Blocking had it.
+        # OS-level file copy, not cmds.file(i=True) -- importing a file
+        # into an already-open scene flattens its nested references into
+        # embedded geometry (confirmed via CapstoneAnimation.py's identical
+        # copy-in step: an empty Reference Editor after import, despite
+        # pose/position data surviving). Opening a file with references,
+        # unlike importing one, preserves them correctly, so copying
+        # Layout's file to the Blocking path and opening THAT keeps every
+        # reference (Sets/Props/Character Proxy) exactly as Layout had it.
         save_path = os.path.join(directory, f"{base_name}_v1.mb")
         os.makedirs(directory, exist_ok=True)
-        shutil.copyfile(blocking_path, save_path)
+        shutil.copyfile(layout_path, save_path)
         open_existing_scene(save_path)
-        log(f"Copied Blocking file to Animation: {blocking_path} -> {save_path}")
+        log(f"Copied Layout file to Blocking: {layout_path} -> {save_path}")
 
-        # skip_already_referenced=True: the copy above already carries
-        # Blocking's posed/keyframed rig over as a genuine live reference
-        # now -- _rig_already_present() detects it and leaves it
-        # completely untouched. This only adds a fresh reference for rigs
-        # that weren't Shot-Ready yet at Blocking time.
-        reference_character_rigs(character_rigs, film_name, skip_already_referenced=True)
+        reference_character_rigs(character_rigs, film_name)
         set_shot_frame_range(frame_count)
 
         stamp_scene_metadata(film_name, scene_number, shot_number, shot_id,
@@ -434,8 +376,8 @@ def run_shot(login_name=None, shot_id=None):
         stamp_render_dimensions(context)
 
         save_scene(save_path)
-        log(f"Created fresh Animation (copy of Blocking + referenced rigs): {save_path}")
-        log("CapstoneAnimation.run_shot() completed successfully")
+        log(f"Created fresh Blocking (copy of Layout + referenced rigs): {save_path}")
+        log("CapstoneBlocking.run_shot() completed successfully")
         return True
 
     except Exception as e:

@@ -13,6 +13,7 @@
 import os
 import re
 import json
+import shutil
 import getpass
 import datetime
 
@@ -271,6 +272,22 @@ def stamp_scene_metadata(film_name, scene_number, shot_number, shot_id, scene_id
         cmds.fileInfo("GAA_shot_id", str(shot_id))
 
 
+def stamp_render_dimensions(context):
+    """
+    Tags the scene with this shot's render resolution, derived server-side
+    from the film's aspect ratio preset (Create/Edit Film) -- see
+    resolve_render_dimensions() in capstone_routes.py. Lets
+    GAAPlayblastTool_V7.py playblast at the right size instead of a
+    hardcoded 1920x1080 for every film. No-op if the session context
+    predates this (missing render_width/render_height).
+    """
+    width = context.get("render_width")
+    height = context.get("render_height")
+    if width and height:
+        cmds.fileInfo("GAA_render_width", str(width))
+        cmds.fileInfo("GAA_render_height", str(height))
+
+
 def save_scene(save_path):
     """
     Explicit type="mayaBinary" — see CapstoneLayout.save_scene() for why.
@@ -322,34 +339,46 @@ def run_shot(login_name=None, shot_id=None):
             open_existing_scene(existing_path)
             stamp_scene_metadata(film_name, scene_number, shot_number, shot_id,
                                   context["scene_id"], display_name)
+            stamp_render_dimensions(context)
             reference_light_rigs(context.get("light_rigs", []), film_name, skip_already_referenced=True)
             log(f"Opened existing Lighting (v{existing_version}): {existing_path}")
             log("CapstoneLighting.run_shot() completed successfully")
             return True
 
-        if not context.get("animation_locked"):
-            log("ERROR: Animation is not approved yet; Lighting cannot be created")
+        if not context.get("shot_animation_approved"):
+            log("ERROR: This shot's Animation is not approved (or CUT) yet; Lighting cannot be created")
             cmds.warning("This shot's Animation hasn't been approved yet — Lighting can't start until it is.")
             return False
 
         _, animation_path = find_latest_animation_any_user(directory, film_name, scene_number, shot_number)
         if not animation_path:
-            log(f"ERROR: animation_locked is true but no Animation file found in {directory}")
+            log(f"ERROR: shot_animation_approved is true but no Animation file found in {directory}")
             cmds.warning("Animation is marked approved, but no Animation file could be found on disk. Contact your instructor.")
             return False
 
-        cmds.file(new=True, force=True)
-        cmds.file(animation_path, i=True, ignoreVersion=True)
-        log(f"Copied in Animation: {animation_path}")
+        # OS-level file copy, not cmds.file(i=True) -- importing a file
+        # into an already-open scene flattens its nested references into
+        # embedded geometry (confirmed via CapstoneAnimation.py's identical
+        # copy-in step: an empty Reference Editor after import, despite
+        # pose/position data surviving). Opening a file with references,
+        # unlike importing one, preserves them correctly, so copying
+        # Animation's file to the Lighting path and opening THAT keeps
+        # every reference (character rigs included) exactly as Animation
+        # had it.
+        save_path = os.path.join(directory, f"{base_name}_v1.mb")
+        os.makedirs(directory, exist_ok=True)
+        shutil.copyfile(animation_path, save_path)
+        open_existing_scene(save_path)
+        log(f"Copied Animation file to Lighting: {animation_path} -> {save_path}")
 
         reference_light_rigs(context.get("light_rigs", []), film_name, skip_already_referenced=True)
 
         stamp_scene_metadata(film_name, scene_number, shot_number, shot_id,
                               context["scene_id"], display_name)
+        stamp_render_dimensions(context)
 
-        save_path = os.path.join(directory, f"{base_name}_v1.mb")
         save_scene(save_path)
-        log(f"Created fresh Lighting (copy-in from Animation + referenced light rigs): {save_path}")
+        log(f"Created fresh Lighting (copy of Animation + referenced light rigs): {save_path}")
         log("CapstoneLighting.run_shot() completed successfully")
         return True
 

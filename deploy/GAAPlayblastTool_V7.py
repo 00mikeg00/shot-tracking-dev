@@ -55,38 +55,34 @@ ASSIGNMENT_STEP_NAME_MAP = {
     "BP": "Blocking Plus",
     "P": "Polish"
 }
-FILM_STEP_CODES = ["LAY", "ANIM", "LGT"]
+FILM_STEP_CODES = ["LAY", "BL", "ANIM", "LGT"]
 FILM_DEPT_NAME_MAP = {
     "LAY": "Layout",
+    "BL": "Blocking",
     "ANIM": "Animation",
     "LGT": "Lighting"
 }
 
-# Matches both shapes in use across the capstone pipeline:
-#   Film_Scene_Shot_LAY_User_v#.mb / Film_Scene_Shot_LGT_User_v#.mb
-#     (CapstoneLayout.py / CapstoneLighting.py -- no sub-step)
-#   Film_Scene_Shot_ANIM_User_{BL|BP|P}_V###.mb
-#     (CapstoneAnimation.py -- Blocking/Blocking Plus/Polish sub-step)
+# Film-shot filename convention (Layout -> Blocking -> Animation ->
+# Lighting are each their own top-level step now, not a self-locked
+# sub-step chain -- see CapstoneBlocking.py/CapstoneAnimation.py):
+#   Film_Scene_Shot_{LAY|BL|ANIM|LGT}_User_v#.mb
 # User/film names may contain spaces but never underscores (matches the
 # convention every Capstone*.py filename builder relies on), so a lazy
 # `.+?` for each field, anchored on the literal underscores and the
-# terminal _v###, unambiguously separates them regardless of which shape
-# is present -- unlike the old fixed rsplit(_, 5), which only worked for
-# the 6-field (no sub-step) shape and silently mis-parsed/rejected every
-# Animation file.
+# terminal _v#, unambiguously separates them.
 FILM_FILENAME_RE = re.compile(
-    r"^(?P<film>.+?)_(?P<scene>\d{3})_(?P<shot>\d{3})_(?P<dept>LAY|ANIM|LGT)_"
-    r"(?P<user>.+?)(?:_(?P<substep>BL|BP|P))?_[vV](?P<version>\d+)$",
+    r"^(?P<film>.+?)_(?P<scene>\d{3})_(?P<shot>\d{3})_(?P<dept>LAY|BL|ANIM|LGT)_"
+    r"(?P<user>.+?)_[vV](?P<version>\d+)$",
     re.IGNORECASE
 )
 
 
 def parse_film_filename(filename):
     """
-    Returns a dict with film/scene/shot/dept/user/substep/version if
-    filename matches the capstone film-shot convention, else None.
-    dept is upper-cased (LAY/ANIM/LGT); substep is upper-cased (BL/BP/P)
-    or None for departments that don't have sub-steps.
+    Returns a dict with film/scene/shot/dept/user/version if filename
+    matches the capstone film-shot convention, else None. dept is
+    upper-cased (LAY/BL/ANIM/LGT).
     """
     name = os.path.splitext(filename)[0]
     m = FILM_FILENAME_RE.match(name)
@@ -95,8 +91,6 @@ def parse_film_filename(filename):
 
     d = m.groupdict()
     d["dept"] = d["dept"].upper()
-    if d["substep"]:
-        d["substep"] = d["substep"].upper()
     return d
 
 
@@ -106,11 +100,10 @@ def parse_film_filename(filename):
 
 def is_film_scene(filename):
     """
-    Detect the capstone film-shot naming convention (Layout/Lighting's
-    FILM_SCENE_SHOT_STEP_USER_v#, or Animation's ...STEP_USER_SUBSTEP_V###
-    -- see FILM_FILENAME_RE).
+    Detect the capstone film-shot naming convention
+    (FILM_SCENE_SHOT_STEP_USER_v# -- see FILM_FILENAME_RE).
     Example: Vacation_010_010_LAY_Mike_v1.mb
-    Example: Vacation_010_010_ANIM_Mike_BL_V001.mb
+    Example: Vacation_010_010_BL_Mike_v1.mb
     """
     return parse_film_filename(filename) is not None
 
@@ -133,6 +126,31 @@ def get_scene_metadata():
         "semester": _fi("GAA_semester"),
         "display_name": _fi("GAA_display_name"),
     }
+
+
+DEFAULT_FILM_RENDER_WIDTH = 1920
+DEFAULT_FILM_RENDER_HEIGHT = 1080
+
+
+def get_film_render_dimensions():
+    """
+    Reads GAA_render_width/GAA_render_height, stamped by
+    CapstoneLayout.py/CapstoneBlocking.py/CapstoneAnimation.py/
+    CapstoneLighting.py from the film's aspect ratio preset (Create/Edit
+    Film -- see resolve_render_dimensions() in capstone_routes.py). Falls
+    back to the old hardcoded 1920x1080 for scenes that predate this
+    tagging, or anything malformed, rather than failing the playblast.
+    """
+    def _fi_int(key, default):
+        val = cmds.fileInfo(key, q=True)
+        try:
+            return int(val[0]) if val else default
+        except (TypeError, ValueError):
+            return default
+
+    width = _fi_int("GAA_render_width", DEFAULT_FILM_RENDER_WIDTH)
+    height = _fi_int("GAA_render_height", DEFAULT_FILM_RENDER_HEIGHT)
+    return width, height
 
 
 def get_render_cam():
@@ -527,11 +545,7 @@ def perform_film_playblast(width, height):
 
     parsed = parse_film_filename(filename)
     if not parsed:
-        cmds.warning(
-            "Filename must follow: Title_Scene_Shot_STEP_User_v#.mb "
-            "(Animation adds a Blocking/Blocking Plus/Polish sub-step: "
-            "Title_Scene_Shot_ANIM_User_BL_V###.mb)"
-        )
+        cmds.warning("Filename must follow: Title_Scene_Shot_STEP_User_v#.mb")
         return
 
     film_title = parsed["film"]
@@ -539,7 +553,6 @@ def perform_film_playblast(width, height):
     shot = parsed["shot"]
     dept = parsed["dept"]
     user = parsed["user"]
-    substep = parsed["substep"]
     version = parsed["version"]
 
     if dept not in FILM_STEP_CODES:
@@ -547,17 +560,9 @@ def perform_film_playblast(width, height):
         return
 
     dept_name = FILM_DEPT_NAME_MAP.get(dept, dept)
-    substep_name = ASSIGNMENT_STEP_NAME_MAP.get(substep) if substep else None
-    print(f"[INFO] Film shot: department={dept_name} ({dept}) step={substep_name or 'n/a'}")
+    print(f"[INFO] Film shot: department={dept_name} ({dept})")
 
-    # step_tag keeps the sub-step (if any) baked into the movie's own
-    # filename/HUD, same as it's baked into the source .mb filename -- but
-    # get_scene_status's step_match regex only ever looks at the FIRST
-    # letters-only run after the scene/shot digits (see review_routes.py),
-    # so appending "_BL"/"_BP"/"_P" here doesn't change which department it
-    # resolves to.
-    step_tag = f"{dept}_{substep}" if substep else dept
-    playblast_name = f"{film_title}_{scene}_{shot}_{step_tag}_{user}_v{version}"
+    playblast_name = f"{film_title}_{scene}_{shot}_{dept}_{user}_v{version}"
 
     temp_dir = "C:/Temp/Playblast"
     os.makedirs(temp_dir, exist_ok=True)
@@ -630,7 +635,7 @@ def perform_film_playblast(width, height):
         final_version_match = re.search(r"_v(\d+)", dest_path)
         final_version = final_version_match.group(1) if final_version_match else version
 
-        hud_text = f"{film_title}-{scene}-{shot}-{step_tag.replace('_', '-')}-{user}-v{final_version}"
+        hud_text = f"{film_title}-{scene}-{shot}-{dept}-{user}-v{final_version}"
         hud_filter = (
             f"drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':"
             f"text='{hud_text}':"
@@ -792,8 +797,14 @@ def launch_playblast_ui():
         cmds.button(label="SUBMIT ASSIGNMENT", command=lambda _: perform_playblast(1920, 1080))
         cmds.button(label="MOVIE FOR YOU", command=lambda _: perform_playblast(960, 540, personal_only=True))
     elif is_film:
-        cmds.button(label="SUBMIT SHOT", command=lambda _: perform_film_playblast(1920, 1080))
-        cmds.button(label="MOVIE FOR YOU", command=lambda _: perform_film_playblast(960, 540))
+        film_width, film_height = get_film_render_dimensions()
+        # Halving an odd full-res dimension (possible for some aspect
+        # ratio presets) would produce an odd personal-res one -- round up
+        # to even, since video encoders generally expect even dimensions.
+        personal_width = film_width // 2 + (film_width // 2) % 2
+        personal_height = film_height // 2 + (film_height // 2) % 2
+        cmds.button(label="SUBMIT SHOT", command=lambda _: perform_film_playblast(film_width, film_height))
+        cmds.button(label="MOVIE FOR YOU", command=lambda _: perform_film_playblast(personal_width, personal_height))
     else:
         cmds.text(label="Unrecognized file format", align="center")
         cmds.text(label="Open your scene via Shot Tracker's", align="center")

@@ -307,10 +307,14 @@ async function fetchDashboardFilmShots() {
           <span>${isThumbnailSection ? "Thumbnails & Storyboards" : `Scene ${sceneNum}`}</span>
         `;
 
+        // Fixed-width tracks (not "1fr") so a scene with only 1-2 shots
+        // doesn't stretch its boxes to fill the row -- same fixed card
+        // size regardless of shot count, capped at 5 per row via max-width.
         const sceneBody = document.createElement("div");
         sceneBody.id = sceneToggleId;
         sceneBody.className = "grid gap-3 p-3";
-        sceneBody.style.gridTemplateColumns = "repeat(auto-fit,minmax(220px,1fr))";
+        sceneBody.style.gridTemplateColumns = "repeat(auto-fill, 260px)";
+        sceneBody.style.maxWidth = "calc(5 * 260px + 4 * 0.75rem)";
 
         sceneHeader.onclick = () => {
           const isHidden = sceneBody.classList.toggle("hidden");
@@ -338,8 +342,12 @@ async function fetchDashboardFilmShots() {
           }
 
           visibleSteps.forEach(step => {
+            // flex-wrap + a full-width label so a step's controls (dropdown,
+            // due date, OPEN button) drop to their own line instead of
+            // overflowing the fixed-width card and bleeding into the next
+            // one -- there's more here than a single 260px row can fit.
             const stepRow = document.createElement("div");
-            stepRow.className = "flex items-center justify-between gap-2 text-sm mt-1";
+            stepRow.className = "flex flex-wrap items-center gap-2 text-sm mt-1";
 
             if (step.scene_id !== undefined && step.scene_id !== null) {
               stepRow.setAttribute("data-scene-id", step.scene_id);
@@ -349,7 +357,7 @@ async function fetchDashboardFilmShots() {
             }
 
             const label = document.createElement("span");
-            label.className = "text-gray-300";
+            label.className = "text-gray-300 w-full";
             label.textContent = step.step_name || `Step ${step.step_id}`;
 
             const due = document.createElement("span");
@@ -364,16 +372,36 @@ async function fetchDashboardFilmShots() {
             // gating condition is met (CapstoneLayout.py/CapstoneAnimation.py's
             // run_shot() enforce these server-side too; this just keeps the
             // button truthful about it instead of always showing enabled).
+            // Layout -> Blocking -> Animation -> Lighting: each step's own
+            // launcher action, gated on THIS SHOT's own prior step being
+            // Approved or CUT (never scene-wide, never dependent on
+            // sibling shots). Matches the identical gates
+            // capstone_routes.py enforces server-side when Maya actually
+            // opens each file (shot_blocking_context()/
+            // shot_animation_context()/shot_lighting_context()). Blocking
+            // Plus/Polish no longer exist as separate steps -- Blocking
+            // and Animation are each their own top-level step now, not a
+            // self-locked sub-step chain.
             const SHOT_OPEN_CONFIG = {
               "Layout": {
                 action: "shot_layout",
                 ready: shot.scene_layout_done,
                 lockedTitle: "Not ready yet — scene Layout hasn't been approved"
               },
+              "Blocking": {
+                action: "shot_blocking",
+                ready: shot.shot_layout_approved,
+                lockedTitle: "Not ready yet — this shot's Layout hasn't been approved yet"
+              },
               "Animation": {
                 action: "shot_animation",
-                ready: shot.scene_layout_done,
-                lockedTitle: "Not ready yet — scene Layout hasn't been marked done"
+                ready: shot.shot_blocking_approved,
+                lockedTitle: "Not ready yet — this shot's Blocking hasn't been approved yet"
+              },
+              "Lighting": {
+                action: "shot_lighting",
+                ready: shot.shot_animation_approved,
+                lockedTitle: "Not ready yet — this shot's Animation hasn't been approved yet"
               }
             };
             const openConfig = SHOT_OPEN_CONFIG[step.step_name];

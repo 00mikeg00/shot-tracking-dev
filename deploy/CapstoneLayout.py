@@ -21,6 +21,7 @@
 import os
 import re
 import json
+import shutil
 import getpass
 import datetime
 
@@ -322,6 +323,27 @@ def add_shot_camera(shot_number, camera_framing=None):
     return cam_transform
 
 
+def set_shot_frame_range(frame_count):
+    """
+    Applies the shot's current frame_count (Edit Layout Config, never
+    locked -- see films_routes.save_shot_frame_count) as a 1-to-frame_count
+    playback range. Unlike Camera Framing (set once, at shot Layout
+    creation, since it's frozen once approved), this is called on EVERY
+    open/create -- see run_shot() -- so a coordinator revising it later
+    actually propagates instead of only ever applying to the first version.
+    No-op if frame_count isn't set yet.
+    """
+    if not frame_count:
+        return
+    cmds.playbackOptions(
+        minTime=1,
+        maxTime=frame_count,
+        animationStartTime=1,
+        animationEndTime=frame_count
+    )
+    log(f"Frame range set: 1-{frame_count}")
+
+
 def set_four_view_layout(camera_name):
     """
     Identical to Assignments.set_four_view_layout() — see that module for
@@ -403,6 +425,22 @@ def stamp_scene_metadata(film_name, scene_number, step_name, display_name,
         cmds.fileInfo("GAA_shot_id", str(shot_id))
     if shot_number is not None:
         cmds.fileInfo("GAA_shot_number", str(shot_number))
+
+
+def stamp_render_dimensions(context):
+    """
+    Tags the scene with this shot's render resolution, derived server-side
+    from the film's aspect ratio preset (Create/Edit Film) -- see
+    resolve_render_dimensions() in capstone_routes.py. Lets
+    GAAPlayblastTool_V7.py playblast at the right size instead of a
+    hardcoded 1920x1080 for every film. No-op if the session context
+    predates this (missing render_width/render_height).
+    """
+    width = context.get("render_width")
+    height = context.get("render_height")
+    if width and height:
+        cmds.fileInfo("GAA_render_width", str(width))
+        cmds.fileInfo("GAA_render_height", str(height))
 
 
 def save_scene(save_path):
@@ -506,6 +544,8 @@ def run_shot(login_name=None, shot_id=None):
             stamp_scene_metadata(film_name, scene_number, "Layout", display_name,
                                   scene_id=context["scene_id"], shot_id=shot_id,
                                   shot_number=shot_number)
+            stamp_render_dimensions(context)
+            set_shot_frame_range(context.get("frame_count"))
             log(f"Opened existing shot Layout (v{existing_version}): {existing_path}")
             log("CapstoneLayout.run_shot() completed successfully")
             return True
@@ -522,23 +562,34 @@ def run_shot(login_name=None, shot_id=None):
             cmds.warning("Scene Layout is marked done, but no scene Layout file could be found on disk. Contact your instructor.")
             return False
 
-        # Copy-in, not reference: import the scene layout's contents into a
-        # brand-new scene, then save-as under the shot's own name/path. No
-        # live link back — future scene Layout edits will not propagate
-        # here, per the design doc's explicit "no live reference" call.
-        cmds.file(new=True, force=True)
-        cmds.file(scene_layout_path, i=True, ignoreVersion=True)
-        log(f"Copied in scene Layout: {scene_layout_path}")
+        # OS-level file copy, not cmds.file(i=True) -- importing a file
+        # into an already-open scene flattens its nested references into
+        # embedded geometry (confirmed via CapstoneAnimation.py's identical
+        # copy-in step: an empty Reference Editor after import, despite
+        # pose/position data surviving). Opening a file with references,
+        # unlike importing one, preserves them correctly, so copying the
+        # scene Layout file to the shot Layout path and opening THAT keeps
+        # every reference (Sets/Props/Character Proxy) exactly as the
+        # scene Layout had it. Still no live link back to the scene Layout
+        # FILE itself -- it's a copy, not a reference to that file, so
+        # future scene Layout edits still won't propagate here, per the
+        # design doc's explicit "no live reference" call.
+        save_path = os.path.join(directory, f"{base_name}_v1.mb")
+        os.makedirs(directory, exist_ok=True)
+        shutil.copyfile(scene_layout_path, save_path)
+        open_existing_scene(save_path)
+        log(f"Copied scene Layout file to shot Layout: {scene_layout_path} -> {save_path}")
 
         add_shot_camera(shot_number, camera_framing=context.get("camera_framing"))
+        set_shot_frame_range(context.get("frame_count"))
 
         stamp_scene_metadata(film_name, scene_number, "Layout", display_name,
                               scene_id=context["scene_id"], shot_id=shot_id,
                               shot_number=shot_number)
+        stamp_render_dimensions(context)
 
-        save_path = os.path.join(directory, f"{base_name}_v1.mb")
         save_scene(save_path)
-        log(f"Created fresh shot Layout (copy-in from scene): {save_path}")
+        log(f"Created fresh shot Layout (copy of scene Layout): {save_path}")
         log("CapstoneLayout.run_shot() completed successfully")
         return True
 

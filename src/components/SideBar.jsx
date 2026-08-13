@@ -73,8 +73,9 @@ export default function SideBar({
         THUMB: "Thumbnails",
         SB: "Storyboards",
         LAY: "FB Layout",
+        BL: "FB Blocking",
         ANIM: "FB Animation",
-        LIGHT: "FB Lighting"
+        LGT: "FB Lighting"
         // Expand as needed
     };
       

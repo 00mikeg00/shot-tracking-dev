@@ -13,6 +13,7 @@ from app.models import get_all_steps, get_all_workflows
 from app.database.db import get_db
 from app.utils.auth_utils import login_required
 from app.utils.utils import find_matching_asset_file, ensure_asset_folder
+from app.utils.render_resolution import ASPECT_RATIO_PRESETS, DEFAULT_ASPECT_RATIO
 from app.models.films import (get_all_semesters,  get_users_by_group_name, get_recursive_crossflows,
     delete_film, get_all_films, add_film, seed_preproduction_steps, get_film_by_id,
     get_all_assets, get_asset_by_id, add_asset, update_asset, delete_asset, get_asset_status_summary,
@@ -209,7 +210,8 @@ def add_film_route():
                 "semester_id": request.form.get("semester_id"),
                 "director_id": request.form.get("director_id"),
                 "upm_id": request.form.get("upm_id"),
-                "step_id": request.form.get("step_id")
+                "step_id": request.form.get("step_id"),
+                "aspect_ratio": request.form.get("aspect_ratio")
             }
 
             film_id = add_film(data)
@@ -401,7 +403,9 @@ def add_film_route():
         workflows=workflows,
         grouped_steps=grouped_steps,
         steps_map=steps_map,
-        selected_step_ids=selected_step_ids
+        selected_step_ids=selected_step_ids,
+        aspect_ratio_presets=ASPECT_RATIO_PRESETS,
+        default_aspect_ratio=DEFAULT_ASPECT_RATIO
     )
 
 @films_bp.route("/api/child_flows/<int:step_id>", methods=["GET"])
@@ -521,12 +525,13 @@ def edit_film_route(film_id):
             semester_id = request.form.get("semester_id")
             director_id = request.form.get("director_id")
             upm_id = request.form.get("upm_id")
+            aspect_ratio = request.form.get("aspect_ratio") or DEFAULT_ASPECT_RATIO
 
             db.execute("""
                 UPDATE films
-                SET name = ?, description = ?, step_id = ?, semester_id = ?, director_id = ?, upm_id = ?
+                SET name = ?, description = ?, step_id = ?, semester_id = ?, director_id = ?, upm_id = ?, aspect_ratio = ?
                 WHERE id = ?
-            """, (name, description, step_id, semester_id, director_id, upm_id, film_id))
+            """, (name, description, step_id, semester_id, director_id, upm_id, aspect_ratio, film_id))
 
             db.commit()
             flash("[OK] Film updated successfully!")
@@ -541,7 +546,8 @@ def edit_film_route(film_id):
             semesters=semesters,
             directors=directors,
             upms=upms,
-            prepro_flows=prepro_flows
+            prepro_flows=prepro_flows,
+            aspect_ratio_presets=ASPECT_RATIO_PRESETS
         )
 
     except Exception as e:
@@ -1327,7 +1333,7 @@ def edit_layout_config(film_id, scene_id):
     # PR notes), it just shows whatever shots already exist under this
     # scene, if any.
     shots = db.execute("""
-        SELECT sh.id, sh.shot_number, sh.camera_framing,
+        SELECT sh.id, sh.shot_number, sh.camera_framing, sh.frame_count,
                sl.locked AS layout_locked
         FROM shots sh
         LEFT JOIN step_locks sl
@@ -1432,6 +1438,47 @@ def save_shot_camera_framing(film_id, scene_id, shot_id):
     db.commit()
 
     return jsonify({"success": True, "shot_id": shot_id, "camera_framing": framing})
+
+
+@films_bp.route("/<int:film_id>/scenes/<int:scene_id>/layout-config/shots/<int:shot_id>/frame-count", methods=["POST"])
+@login_required
+def save_shot_frame_count(film_id, scene_id, shot_id):
+    """
+    Unlike Camera Framing, frame_count is NEVER locked -- it's expected to
+    change over the course of production (retimes, edit changes), and every
+    scene CapstoneLayout.py/CapstoneAnimation.py opens or creates for this
+    shot re-applies whatever value is current at that moment (see
+    set_frame_range() in both). So there's no lock check here, only the
+    same Layout Coordinator permission gate as the rest of this page.
+    """
+    db = get_db()
+
+    shot = db.execute(
+        "SELECT sh.id FROM shots sh JOIN scenes sc ON sc.id = sh.scene_id "
+        "WHERE sh.id = ? AND sh.scene_id = ? AND sc.film_id = ?",
+        (shot_id, scene_id, film_id)
+    ).fetchone()
+    if not shot:
+        return jsonify({"error": "Shot not found"}), 404
+
+    if not _can_edit_layout_config(db, film_id, session["user_id"]):
+        return jsonify({"error": "Forbidden: Layout Coordinator access required"}), 403
+
+    data = request.get_json(silent=True) or {}
+    frame_count = data.get("frame_count")
+
+    if frame_count is not None:
+        try:
+            frame_count = int(frame_count)
+        except (TypeError, ValueError):
+            return jsonify({"error": "frame_count must be a whole number"}), 400
+        if frame_count < 1:
+            return jsonify({"error": "frame_count must be at least 1"}), 400
+
+    db.execute("UPDATE shots SET frame_count = ? WHERE id = ?", (frame_count, shot_id))
+    db.commit()
+
+    return jsonify({"success": True, "shot_id": shot_id, "frame_count": frame_count})
 
 
 @films_bp.route("/<int:film_id>/scenes/<int:scene_id>/layout-config/unlock", methods=["POST"])
@@ -2564,15 +2611,19 @@ def update_shot_status():
     """, (new_status, shot_id, step_id))
 
     # FB Animation/FB Blocking reaching Approved locks the sibling
-    # production step (step_locks, entity_type='shot_step') -- this is what
-    # CapstoneLighting.py's animation_locked gate and CapstoneAnimation.py's
-    # resolve_current_step() actually read, and replaces the old dedicated
-    # "Approve Animation"/"Approve Blocking" buttons now that approval
-    # happens through this same per-shot status dropdown instead. Blocking
-    # Plus/Polish have no FB pair -- they're self-locked by the artist via
-    # GAA Save, not coordinator-graded here. FB Lighting isn't included --
-    # Lighting is the last file-versioned step, there's nothing after it to
-    # unlock (Comp is out of scope).
+    # production step (step_locks, entity_type='shot_step'). Note this only
+    # fires when the FB variant specifically is marked Approved -- marking
+    # the production step ("Blocking") itself Approved does NOT set this
+    # lock, which is exactly the trap that made an earlier manual approval
+    # look like it worked (both showed "Approved") without actually
+    # unlocking anything downstream. The real per-shot gates
+    # (shot_layout_approved/shot_blocking_approved/shot_animation_approved
+    # in capstone_routes.py and get_dashboard_data() below) read
+    # shot_step_assignments.status directly instead, so they don't depend
+    # on this FB/production distinction or on step_locks at all -- this
+    # block is left as harmless bookkeeping, not the source of truth.
+    # FB Lighting isn't included -- Lighting is the last file-versioned
+    # step, there's nothing after it to unlock (Comp is out of scope).
     SHOT_FB_UNLOCKS_STEP = {"FB Animation": "Animation", "FB Blocking": "Blocking"}
     if new_status == "Approved":
         fb_step_row = db.execute("SELECT name, parent_id FROM steps WHERE id = ?", (step_id,)).fetchone()
@@ -2583,26 +2634,6 @@ def update_shot_status():
                 "SELECT id FROM steps WHERE parent_id = ? AND name = ?",
                 (fb_step_row["parent_id"], production_step_name)
             ).fetchone()
-
-            # Animation is additionally gated on Polish having been locked
-            # (the artist's own Blocking->Blocking Plus->Polish submission
-            # via GAA Save) -- approving FB Animation before that shouldn't
-            # silently lock Animation on an unfinished shot.
-            if production_step and production_step_name == "Animation":
-                polish_step = db.execute(
-                    "SELECT id FROM steps WHERE parent_id = ? AND name = 'Polish'",
-                    (fb_step_row["parent_id"],)
-                ).fetchone()
-                if polish_step:
-                    polish_lock = db.execute("""
-                        SELECT locked FROM step_locks
-                        WHERE entity_type = 'shot_step' AND entity_id = ? AND step_id = ?
-                    """, (shot_id, polish_step["id"])).fetchone()
-                    if not (polish_lock and polish_lock["locked"]):
-                        return jsonify({
-                            "success": False,
-                            "error": "This shot's Polish version hasn't been submitted yet -- Animation can't be approved until it is."
-                        }), 400
 
             if production_step:
                 now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -4213,6 +4244,41 @@ def get_dashboard_data():
                 """, (layout_step_row["id"], film["id"])).fetchall()
             }
 
+        # Per-shot gates for Layout -> Blocking -> Animation -> Lighting.
+        # Each is THIS SHOT's own prior step being Approved or CUT -- never
+        # scene-wide, never dependent on sibling shots. Read from
+        # shot_step_assignments.status rather than step_locks: CUT is set
+        # through the generic status-dropdown endpoint (update_scene_status()
+        # in review_routes.py), which never touches step_locks, and there's
+        # no dedicated "Approve" button anywhere in the UI for any of these
+        # steps -- coordinators approve via the plain status dropdown, which
+        # only ever writes shot_step_assignments. A lock-based check would
+        # never see any of these approvals. Matches the identical gates
+        # capstone_routes.py enforces server-side when Maya actually opens
+        # each file (shot_blocking_context()/shot_animation_context()/
+        # shot_lighting_context()).
+        def _approved_shot_ids(step_name):
+            step_row = conn.execute(
+                "SELECT id FROM steps WHERE parent_id = ? AND name = ?",
+                (film["film_step_id"], step_name)
+            ).fetchone()
+            if not step_row:
+                return set()
+            return {
+                row["shot_id"] for row in conn.execute("""
+                    SELECT ssa.shot_id
+                    FROM shot_step_assignments ssa
+                    JOIN shots s ON s.id = ssa.shot_id
+                    JOIN scenes sc ON sc.id = s.scene_id
+                    WHERE ssa.step_id = ? AND sc.film_id = ?
+                      AND LOWER(TRIM(ssa.status)) IN ('approved', 'cut')
+                """, (step_row["id"], film["id"])).fetchall()
+            }
+
+        layout_approved_shot_ids = _approved_shot_ids("Layout")
+        blocking_approved_shot_ids = _approved_shot_ids("Blocking")
+        animation_approved_shot_ids = _approved_shot_ids("Animation")
+
         # Get scene-level assignments (e.g., thumbnails)
         scene_steps = conn.execute("""
             SELECT sps.scene_id, sc.scene_number, sps.step_id, sps.status, sps.due_date,
@@ -4302,6 +4368,9 @@ def get_dashboard_data():
                     "scene_number": assign["scene_number"],
                     "scene_id": scene_id,
                     "scene_layout_done": scene_id in done_scene_ids,
+                    "shot_layout_approved": shot_id in layout_approved_shot_ids,
+                    "shot_blocking_approved": shot_id in blocking_approved_shot_ids,
+                    "shot_animation_approved": shot_id in animation_approved_shot_ids,
                     "steps": [step_data]
                 }
                 shots.append(shot_entry)
