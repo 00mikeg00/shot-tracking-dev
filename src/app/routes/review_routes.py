@@ -883,10 +883,14 @@ def get_scene_status():
             step_name_guess = "Thumbnails"  # default fallback
             if step_match:
                 code = step_match.group(1).upper()
+                # Layout -> Blocking -> Animation -> Lighting are each their
+                # own top-level department code now (BL is no longer a
+                # sub-step suffix on ANIM -- see GAAPlayblastTool_V7.py).
                 step_map = {
                     "THUMB": "Thumbnails",
                     "SB": "Storyboards",
                     "LAY": "Layout",
+                    "BL": "Blocking",
                     "ANIM": "Animation",
                     "LGT": "Lighting"
                 }
@@ -972,9 +976,42 @@ def get_scene_status():
         parent_step_id = row["step_id"]
 
         step_name_full = f"FB {step_name_guess}"
-        uses_shots_table = step_name_guess in ["Storyboards","Layout", "Animation", "Lighting"]
+        # Layout, Blocking, Animation, and Lighting are each per-shot steps
+        # tracked in shot_step_assignments -- must be included here or the
+        # query below silently falls through to scene_progress_steps
+        # instead, finding nothing for a shot-level step.
+        uses_shots_table = step_name_guess in [
+            "Storyboards", "Layout", "Blocking", "Animation", "Lighting"
+        ]
 
-        if uses_shots_table:
+        # Per-shot files (Film_Scene_Shot_STEP_User_v#) carry a SECOND
+        # 3-digit group after the scene number -- scene-level files
+        # (THUMB/SB) only ever have one, so this simply won't match for
+        # those and the query below falls back to scene-wide, same as
+        # before. Without this, a scene with more than one shot returns
+        # whichever shot's row LIMIT 1 happens to grab first (lowest
+        # shot_id), not the shot the file actually belongs to -- e.g. a
+        # scene where shot 010 is already "Approved" made every OTHER
+        # shot in that scene show "Approved" too.
+        shot_number = None
+        if file_name:
+            shot_num_match = re.search(r"_\d{3}_(\d{3})_", file_name)
+            shot_number = shot_num_match.group(1) if shot_num_match else None
+            print(f"🧠 DEBUG: Parsed shot_number = {shot_number}")
+
+        if uses_shots_table and shot_number:
+            cursor.execute("""
+                SELECT ssa.step_id, ssa.status, st.name
+                FROM shot_step_assignments ssa
+                JOIN shots sh ON ssa.shot_id = sh.id
+                JOIN steps st ON ssa.step_id = st.id
+                WHERE sh.scene_id = ?
+                AND CAST(sh.shot_number AS INTEGER) = CAST(? AS INTEGER)
+                AND st.name = ?
+                AND st.parent_id = ?
+                LIMIT 1
+            """, (scene_id, shot_number, step_name_full, parent_step_id))
+        elif uses_shots_table:
             cursor.execute("""
                 SELECT ssa.step_id, ssa.status, st.name
                 FROM shot_step_assignments ssa
@@ -1429,8 +1466,33 @@ def upload_film_shot():
     shot_id = shot_row["shot_id"]
 
     # 🔹 Step 2: Determine paired production step (non-FB)
-    # If step_id is FB Layout (249), paired step is Layout (248)
-    update_step_id = step_id - 1  # this pattern holds across your pipeline
+    # Resolved by name (strip "FB " prefix, look up the sibling step under
+    # the same parent) rather than assuming FB step_id == production
+    # step_id + 1 -- that held for Layout (248/249) and Animation
+    # (251/252) in this film's workflow, but NOT for Lighting (253/274),
+    # where it silently pointed at a step_id (273) that doesn't exist,
+    # so the UPDATE below matched zero rows and Lighting submissions never
+    # actually flipped to "Submitted".
+    fb_step_row = cur.execute(
+        "SELECT name, parent_id FROM steps WHERE id = ?", (step_id,)
+    ).fetchone()
+    if not fb_step_row:
+        conn.close()
+        return jsonify({"error": f"step_id {step_id} not found"}), 404
+
+    production_name = fb_step_row["name"]
+    if production_name.startswith("FB "):
+        production_name = production_name[len("FB "):]
+
+    production_step_row = cur.execute(
+        "SELECT id FROM steps WHERE name = ? AND parent_id = ?",
+        (production_name, fb_step_row["parent_id"])
+    ).fetchone()
+    if not production_step_row:
+        conn.close()
+        return jsonify({"error": f"No paired production step found for '{fb_step_row['name']}'"}), 404
+
+    update_step_id = production_step_row["id"]  # this pattern holds across your pipeline
 
     # 🔹 Step 3: Save playblast
     save_path = f"//GAAAP1PRD01W/Films/{film_name}/{scene_number}/{shot_number}/{file.filename}"
@@ -1704,12 +1766,6 @@ def save_annotations():
     data = request.get_json(force=True, silent=True)
     print(">>> BODY:", data)
 
-    # 🛑 Prevent overwriting DB statuses (like CUT) with an empty re-save
-    if data.get("is_film") and not data.get("annotations") and not data.get("notes"):
-        print("🛑 Skipping /save_annotations — no content, avoiding overwrite of CUT status")
-        return jsonify({"message": "No annotations — skipped to preserve CUT"}), 200
-
-
     if request.method == "OPTIONS":
         response = make_response()
         response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
@@ -1750,7 +1806,7 @@ def save_annotations():
             except Exception as e:
                 print(f"[WARN] Failed to resolve wildcard base: {e}")
 
-        # 🟢 Continue using corrected base for reviewed path
+        # 🟢 Reviewed path always gets the _R rename, regardless of annotations/notes
         if base.endswith("_R"):
             reviewed_path = os.path.join(dirname, f"{base}{ext}")
             reviewed_json_path = os.path.join(dirname, f"{base}.json")
@@ -1763,24 +1819,7 @@ def save_annotations():
                     os.rename(original_path, reviewed_path)
                     print(f"[OK] Renamed → {reviewed_path}")
             except Exception as e:
-                print(f"[WARN] Rename failed: {e} — proceeding to save JSON anyway")
-
-
-        # 🟢 Automatically skip if file already reviewed (_R)
-        if base.endswith("_R"):
-            reviewed_path = os.path.join(dirname, f"{base}{ext}")
-            reviewed_json_path = os.path.join(dirname, f"{base}.json")
-        else:
-            reviewed_path = os.path.join(dirname, f"{base}_R{ext}")
-            reviewed_json_path = os.path.join(dirname, f"{base}_R.json")
-
-            # ✅ Try renaming file for reviewed version
-            try:
-                if os.path.exists(original_path):
-                    os.rename(original_path, reviewed_path)
-                    print(f"[OK] Renamed → {reviewed_path}")
-            except Exception as e:
-                print(f"[WARN] Rename failed: {e} — proceeding to save JSON anyway")
+                print(f"[WARN] Rename failed: {e} — proceeding anyway")
 
         # 🖊️ Planning drawings are DB-backed (planning_files.file_path), not
         # filename-scanned like videos -- the rename above just orphaned that
@@ -1809,13 +1848,17 @@ def save_annotations():
         except Exception as e:
             print(f"[WARN] planning_files path sync skipped: {e}")
 
-        # ✅ Always write JSON (even empty) beside reviewed file
-        try:
-            with open(reviewed_json_path, "w", encoding="utf-8") as f:
-                json.dump(annotations or {}, f, indent=2, ensure_ascii=False)
-            print(f"[OK] JSON saved → {reviewed_json_path}")
-        except Exception as e:
-            print(f"[ERROR] JSON write failed: {e}")
+        # ✅ Only write JSON when there's actual content — matches assignment behavior
+        has_content = bool(annotations) or bool(data.get("notes"))
+        if has_content:
+            try:
+                with open(reviewed_json_path, "w", encoding="utf-8") as f:
+                    json.dump(annotations or {}, f, indent=2, ensure_ascii=False)
+                print(f"[OK] JSON saved → {reviewed_json_path}")
+            except Exception as e:
+                print(f"[ERROR] JSON write failed: {e}")
+        else:
+            print("[OK] No annotations/notes — skipping JSON write")
 
         # ⭐ Copy to Favorites folder if checkbox was selected
         favorite = data.get("favorite", False)

@@ -2145,6 +2145,33 @@ export default function MarkupTool() {
                                     });
                                     const json = await res.json();
                                     console.log("✅ Scene status update result:", json);
+
+                                    // ⭐ Mark reviewed (_R) the moment a step is set to
+                                    // Approved. This onChange -- not the Save button --
+                                    // is what actually persists a film shot's status, and
+                                    // it never syncs selectedItem/selectedAssignment
+                                    // .statuses back into state, so a later Save click
+                                    // can't reliably see "just got approved" from state.
+                                    if (
+                                      newStatus.trim().toLowerCase() === "approved" &&
+                                      selectedAssignment?.file_path
+                                    ) {
+                                      try {
+                                        const favorite =
+                                          typeof document !== "undefined"
+                                            ? document.getElementById("favoriteCheckbox")?.checked || false
+                                            : false;
+                                        const renameRes = await fetch(`${API_BASE_URL}/review/save_reviewed`, {
+                                          method: "POST",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ file_path: selectedAssignment.file_path, favorite }),
+                                        });
+                                        const renameJson = await renameRes.json();
+                                        console.log("🏷️ Marked reviewed (_R):", renameJson);
+                                      } catch (err) {
+                                        console.error("❌ Failed to mark file reviewed (_R):", err);
+                                      }
+                                    }
                                   } catch (err) {
                                     console.error("❌ Failed to update scene status:", err);
                                   }
