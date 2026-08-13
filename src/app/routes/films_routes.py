@@ -984,7 +984,25 @@ def delete_scene_route(scene_id):
         return redirect(url_for("films.view_films"))
     film_id = film_id["film_id"]
 
+    # step_locks rows for this scene's shots/scene-level steps have no real
+    # FK (polymorphic entity_id, see migrate_polymorphic_step_locks.py) so
+    # leaving them wouldn't raise an IntegrityError, but they'd become
+    # orphaned rows pointing at a deleted shot/scene -- cleaned up here
+    # alongside everything that DOES have a real FK.
+    db.execute("""
+        DELETE FROM step_locks
+        WHERE (entity_type = 'shot_step' AND entity_id IN (SELECT id FROM shots WHERE scene_id = ?))
+           OR (entity_type = 'scene_step' AND entity_id = ?)
+    """, (scene_id, scene_id))
+
     db.execute("DELETE FROM shot_step_assignments WHERE shot_id IN (SELECT id FROM shots WHERE scene_id = ?)", (scene_id,))
+
+    # scene_assets (Edit Layout Config's Sets/Character-Rigs/Props/etc.
+    # assignments) has a real FK to scenes(id) with no ON DELETE CASCADE --
+    # left this out and the scene delete below fails with
+    # sqlite3.IntegrityError: FOREIGN KEY constraint failed for any scene
+    # that ever had assets assigned.
+    db.execute("DELETE FROM scene_assets WHERE scene_id = ?", (scene_id,))
 
     db.execute("DELETE FROM shots WHERE scene_id = ?", (scene_id,))
 
