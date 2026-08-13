@@ -24,7 +24,6 @@ from app.routes.review_routes import review_routes
 from app.routes.semester_routes import semesters_bp
 from app.routes.dashboard_routes import dashboard_bp
 from app.routes.help_routes import help_bp
-from app.routes.scene_pipeline_routes import scene_pipeline_bp
 from app.routes.bugreport_routes import bugreport_bp
 from app.routes.assignment_config_routes import config_bp
 from app.routes.launcher_routes import launcher_bp
@@ -78,7 +77,6 @@ def create_app(config_override=None):
     app.register_blueprint(semesters_bp, url_prefix='/semesters')
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(help_bp)
-    app.register_blueprint(scene_pipeline_bp)
     app.register_blueprint(bugreport_bp)
     app.register_blueprint(config_bp, url_prefix='/classes')
     app.register_blueprint(launcher_bp)
