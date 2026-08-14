@@ -597,32 +597,69 @@ def get_assignment_status():
 
 @review_routes.route("/get_grade_options", methods=["GET"])
 def get_grade_options():
-    """ [OK] Fetch grade options by step_id """
+    """
+    Fetch grade options either by a single step_id (returns a flat array
+    of {name, color} -- used by the film/scene review panel, which
+    already knows each status's step_id), or by assignment_id (an
+    individual_assignments.id -- used by the Assignment review panel,
+    markup/page.jsx's fetch(`.../get_grade_options?assignment_id=...`),
+    which only has the assignment, not a step_id up front). The
+    assignment_id branch returns every Grade-* step under that
+    assignment's workflow as [{step_id, options: [...]}, ...], since an
+    assignment can have more than one (e.g. Grade-Blocking, Grade-Polish)
+    -- that shape is exactly what page.jsx's
+    `data.forEach(step => optionsByStep[step.step_id] = step.options)`
+    expects. Previously this endpoint only ever read step_id, so the
+    assignment_id call always 400'd and every assignment's grade dropdown
+    stayed empty/disabled.
+    """
     step_id = request.args.get("step_id")
-
-    if not step_id:
-        return jsonify({"error": "Missing step_id"}), 400
+    individual_assignment_id = request.args.get("assignment_id")
 
     conn = get_db()
     cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT name, color,
-            CAST(SUBSTR(position, INSTR(position, ' ') + 1) AS INTEGER) AS y_value
-        FROM nodes 
-        WHERE step_id = ?
-        ORDER BY y_value ASC
-    """, (step_id,))
+    def fetch_options(sid):
+        cursor.execute("""
+            SELECT name, color,
+                CAST(SUBSTR(position, INSTR(position, ' ') + 1) AS INTEGER) AS y_value
+            FROM nodes
+            WHERE step_id = ?
+            ORDER BY y_value ASC
+        """, (sid,))
+        return [{"name": r["name"], "color": r["color"]} for r in cursor.fetchall()]
 
-    rows = cursor.fetchall()
+    if individual_assignment_id:
+        row = cursor.execute("""
+            SELECT a.parent_step_id
+            FROM individual_assignments ia
+            JOIN assignments a ON a.id = ia.assignment_id
+            WHERE ia.id = ?
+        """, (individual_assignment_id,)).fetchone()
+
+        if not row or not row["parent_step_id"]:
+            conn.close()
+            return jsonify([])
+
+        grade_steps = cursor.execute("""
+            SELECT id FROM steps WHERE parent_id = ? AND name LIKE 'Grade%'
+        """, (row["parent_step_id"],)).fetchall()
+
+        result = [{"step_id": s["id"], "options": fetch_options(s["id"])} for s in grade_steps]
+        conn.close()
+        return jsonify(result)
+
+    if not step_id:
+        conn.close()
+        return jsonify({"error": "Missing step_id or assignment_id"}), 400
+
+    options = fetch_options(step_id)
     conn.close()
 
-    if not rows:
+    if not options:
         return jsonify({"error": "No grades available"}), 404
 
-    return jsonify([
-        {"name": r["name"], "color": r["color"]} for r in rows
-    ])
+    return jsonify(options)
 
 @review_routes.route("/api/graded_assignments_with_files", methods=["GET"])
 @login_required
