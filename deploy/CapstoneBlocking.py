@@ -258,12 +258,40 @@ def stamp_render_dimensions(context):
     GAAPlayblastTool_V7.py playblast at the right size instead of a
     hardcoded 1920x1080 for every film. No-op if the session context
     predates this (missing render_width/render_height).
+
+    Also applies width/height to Maya's own Render Settings resolution
+    and turns on the Resolution Gate mask on every non-default camera, so
+    the viewport frames the same crop the playblast actually captures --
+    GAAPlayblastTool_V7.py's playblast passes these same numbers straight
+    to cmds.playblast() as raw pixel width/height, which stretches
+    whatever the viewport happens to be showing rather than deriving it
+    from the camera's own film-back aperture. Without this, composing a
+    shot in the viewport (default camera aperture) and what actually gets
+    captured (the film's real aspect ratio) can visibly differ.
     """
     width = context.get("render_width")
     height = context.get("render_height")
-    if width and height:
-        cmds.fileInfo("GAA_render_width", str(width))
-        cmds.fileInfo("GAA_render_height", str(height))
+    if not (width and height):
+        return
+
+    cmds.fileInfo("GAA_render_width", str(width))
+    cmds.fileInfo("GAA_render_height", str(height))
+
+    cmds.setAttr("defaultResolution.width", width)
+    cmds.setAttr("defaultResolution.height", height)
+    cmds.setAttr("defaultResolution.pixelAspect", 1.0)
+    cmds.setAttr("defaultResolution.deviceAspectRatio", width / float(height))
+
+    for cam_shape in cmds.ls(type="camera"):
+        cam_transform = cmds.listRelatives(cam_shape, parent=True)
+        if not cam_transform or cam_transform[0] in ("persp", "top", "front", "side"):
+            continue
+        try:
+            cmds.setAttr(f"{cam_shape}.displayResolution", True)
+            cmds.setAttr(f"{cam_shape}.displayGateMask", True)
+            cmds.setAttr(f"{cam_shape}.filmFit", 3)  # Overscan -- resolution gate stays fully visible, never clipped by the film-back aperture
+        except RuntimeError:
+            continue
 
 
 def set_shot_frame_range(frame_count):
