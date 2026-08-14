@@ -168,16 +168,21 @@ class User:
         return [dict(row) for row in db.execute(query, (class_id,))]
 
     @staticmethod
-    def get_not_in_any_active_class() -> list:
+    def get_all_active_users() -> list:
+        """
+        Every non-archived user -- used by the Archive Users page so an
+        admin can archive a student regardless of whether they're
+        currently enrolled in a class. Previously scoped to only users
+        with NO active class enrollment (get_not_in_any_active_class()),
+        which meant a student added to a class via the class roster's
+        "Add students" flow silently disappeared from this list even
+        though they were still visible on the main Users page.
+        """
         db = get_db()
         query = """
             SELECT u.id, u.name, u.email, u.archived, u.graduation_year
             FROM users u
-            WHERE u.id NOT IN (
-                SELECT ce.user_id
-                FROM class_enrollments ce
-                JOIN classes c ON ce.class_id = c.id
-                WHERE c.archived = 0
-            ) AND u.archived = 0
+            WHERE u.archived = 0
+            ORDER BY u.name
         """
         return [dict(row) for row in db.execute(query)]

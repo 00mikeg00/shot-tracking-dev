@@ -38,7 +38,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {% for user in students_not_in_classes %}
+                    {% for user in active_users %}
                     <tr class="hover:bg-gray-100">
                         <td class="border border-gray-300 p-3 text-center text-black">
                             {% if user.archived == 0 %}

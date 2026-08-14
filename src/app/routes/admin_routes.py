@@ -107,7 +107,7 @@ def archive_users():
             flash(f"Error archiving users: {e}", 'danger')
         return redirect(url_for('admin.archive_users'))
 
-    students_not_in_classes = User.get_not_in_any_active_class()
+    active_users = User.get_all_active_users()
     archived_users = get_archived_users()
 
     conn = get_db()
@@ -117,7 +117,7 @@ def archive_users():
     graduation_years = [row['graduation_year'] for row in year_rows]
 
     return render_template('admin/archive_users.html',
-                            students_not_in_classes=students_not_in_classes,
+                            active_users=active_users,
                             archived_users=archived_users,
                             graduation_years=graduation_years)
 
