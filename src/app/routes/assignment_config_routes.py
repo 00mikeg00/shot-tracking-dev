@@ -12,6 +12,35 @@ config_bp = Blueprint('config_bp', __name__)
 RIGS_FOLDER = os.getenv("RIGS_ROOT", "C:/Cincy/Rigs")
 RIG_EXTS = (".mb", ".ma", ".fbx")
 
+# Same server as every class's Assignments/Scenes folder (see
+# app/services/assignment_service.py's CLASS_FOLDER_ROOT), but a sibling
+# folder a coordinator has to deliberately navigate to -- not the Scenes
+# folder itself, which students already browse for their own versioned
+# files and could stumble onto a raw starter scene in.
+CLASS_FOLDER_ROOT = r"\\GAAAP1PRD01W\Classes"
+STARTER_SCENE_EXTS = (".ma", ".mb")
+
+
+def _list_starter_scenes(semester_name, class_name):
+    """
+    Every .ma/.mb file directly under this class's Assignments/StarterScenes
+    folder -- a coordinator drops files there by hand (no upload flow),
+    this just lists what's already present so the Config Editor can offer
+    them as a dropdown. Missing folder is normal (most classes won't use
+    this), not an error.
+    """
+    folder = os.path.join(CLASS_FOLDER_ROOT, semester_name, class_name, "Assignments", "StarterScenes")
+    if not os.path.isdir(folder):
+        return []
+    try:
+        return sorted(
+            os.path.join(folder, f).replace("\\", "/")
+            for f in os.listdir(folder)
+            if f.lower().endswith(STARTER_SCENE_EXTS)
+        )
+    except OSError:
+        return []
+
 @config_bp.route('/semesters', methods=['GET'])
 @login_required
 def get_semesters():
@@ -315,7 +344,7 @@ def get_assignment_config_by_class(class_id):
         "SELECT name FROM assignments WHERE class_id = ? ORDER BY name", (class_id,)
     ).fetchall()
     presets = cursor.execute("""
-        SELECT assignment_name, rigs, camera, filename, frame_start, frame_end
+        SELECT assignment_name, rigs, camera, filename, frame_start, frame_end, starter_scene
         FROM assignment_config_presets
         WHERE class_id = ?
     """, (class_id,)).fetchall()
@@ -325,7 +354,8 @@ def get_assignment_config_by_class(class_id):
             'camera': bool(p['camera']),
             'filename': p['filename'] or "",
             'frame_start': p['frame_start'],
-            'frame_end': p['frame_end']
+            'frame_end': p['frame_end'],
+            'starter_scene': p['starter_scene'] or ""
         } for p in presets
     }
 
@@ -333,7 +363,7 @@ def get_assignment_config_by_class(class_id):
     for a in assignments:
         name = a['name']
         result_assignments[name] = preset_map.get(
-            name, {"rigs": [], "camera": False, "filename": "", "frame_start": None, "frame_end": None}
+            name, {"rigs": [], "camera": False, "filename": "", "frame_start": None, "frame_end": None, "starter_scene": ""}
         )
 
     rigs_folder = "C:/Cincy/Rigs"
@@ -349,7 +379,8 @@ def get_assignment_config_by_class(class_id):
         "semester_id": class_row["semester_id"],
         "semester_name": class_row["semester_name"],
         "assignments": result_assignments,
-        "rigs": rig_files
+        "rigs": rig_files,
+        "starter_scenes": _list_starter_scenes(class_row["semester_name"], class_row["class_name"])
     })
 
 
@@ -399,6 +430,7 @@ def save_assignment_config_class(class_id):
         frame_end = cfg.get("frame_end")
         frame_start = int(frame_start) if frame_start not in (None, "") else None
         frame_end = int(frame_end) if frame_end not in (None, "") else None
+        starter_scene = (cfg.get("starter_scene") or "").strip() or None
 
         # Normalize rigs -- always list of { "path": "..." }, same as
         # save_assignment_config_semester()'s flattening.
@@ -418,13 +450,14 @@ def save_assignment_config_class(class_id):
             "camera": camera,
             "filename": filename,
             "frame_start": frame_start,
-            "frame_end": frame_end
+            "frame_end": frame_end,
+            "starter_scene": starter_scene or ""
         }
 
         cursor.execute("""
-            INSERT INTO assignment_config_presets (class_id, assignment_name, rigs, camera, filename, frame_start, frame_end)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (class_id, assignment_name, json.dumps(rigs), camera, filename, frame_start, frame_end))
+            INSERT INTO assignment_config_presets (class_id, assignment_name, rigs, camera, filename, frame_start, frame_end, starter_scene)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (class_id, assignment_name, json.dumps(rigs), camera, filename, frame_start, frame_end, starter_scene))
 
     conn.commit()
 

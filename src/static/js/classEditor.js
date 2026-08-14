@@ -12,6 +12,7 @@ let currentClassName = "";
 let currentClassForNewAssignment = "";
 let rigSelectContext = { assignmentName: '' };
 let rigModalWorkingRigs = []; // rig paths for the open rig modal; duplicates allowed (same rig referenced multiple times)
+let starterScenes = []; // full paths under this class's Assignments/StarterScenes folder, from the by-class GET
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MODAL CONTROLS
@@ -38,6 +39,7 @@ window.openClassConfigModal = async function (classId, className) {
 
     classAssignments = data.assignments || {};
     rigList = data.rigs || [];
+    starterScenes = data.starter_scenes || [];
 
     renderClassAssignments();
   } catch (err) {
@@ -174,6 +176,12 @@ document.body.addEventListener("change", (e) => {
     if (!classAssignments[assignmentName]) return;
     classAssignments[assignmentName].filename = e.target.value;
   }
+
+  if (e.target.classList.contains("starter-scene-select")) {
+    const assignmentName = e.target.dataset.assignment;
+    if (!classAssignments[assignmentName]) return;
+    classAssignments[assignmentName].starter_scene = e.target.value;
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -190,7 +198,8 @@ window.saveClassConfig = async function () {
       camera: !!cfg.camera,
       rigs: (cfg.rigs || []).map(r => ({ path: r })),
       frame_start: cfg.frame_start ?? null,
-      frame_end: cfg.frame_end ?? null
+      frame_end: cfg.frame_end ?? null,
+      starter_scene: cfg.starter_scene || ""
     };
   }
 
@@ -231,7 +240,8 @@ window.confirmNewAssignment = function () {
     camera: false,
     rigs: [],
     frame_start: null,
-    frame_end: null
+    frame_end: null,
+    starter_scene: ""
   };
 
   closeNewAssignmentModal();
@@ -314,6 +324,12 @@ function renderClassAssignments() {
           <div class="rig-list-summary text-xs text-blue-400 mt-1">
             ${rigSummary(cfg.rigs)}
           </div>
+        <label class="font-medium">Starter Scene:</label>
+        <select class="starter-scene-select border px-2 py-1 rounded text-black bg-white" data-assignment="${aName}">
+          <option value="">-- None (blank scene) --</option>
+          ${starterScenes.map(path => `<option value="${path}" ${cfg.starter_scene === path ? 'selected' : ''}>${path.split(/[\\/]/).pop()}</option>`).join('')}
+        </select>
+        ${starterScenes.length === 0 ? `<p class="text-xs text-gray-500">No starter scenes found for this class's StarterScenes folder.</p>` : ''}
       </div>
     </div>
   `).join('');

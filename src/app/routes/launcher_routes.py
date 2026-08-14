@@ -96,7 +96,8 @@ def class_context():
             a.name       AS assignment_name,
             acp.rigs     AS rigs_json,
             acp.camera   AS camera,
-            acp.filename AS filename
+            acp.filename AS filename,
+            acp.starter_scene AS starter_scene
         FROM individual_assignments ia
         JOIN assignments a
             ON ia.assignment_id = a.id
@@ -136,7 +137,8 @@ def class_context():
             "status":       status_row["current_status"] if status_row else "Not Started",
             "rigs":         json.loads(row["rigs_json"]) if row["rigs_json"] else [],
             "camera":       bool(row["camera"]),
-            "filename":     row["filename"] or row["assignment_name"]
+            "filename":     row["filename"] or row["assignment_name"],
+            "starter_scene": row["starter_scene"] or None
         })
 
     return jsonify({

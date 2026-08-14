@@ -451,6 +451,36 @@ def open_existing_scene(path):
         cmds.file(rename=path)
 
 
+def open_starter_scene_or_new(assignment):
+    """
+    Opens the assignment's configured starter scene (a coordinator-placed
+    .ma/.mb the student should build on top of instead of a blank scene --
+    see the Assignment Config Editor's "Starter Scene" field, resolved
+    server-side into assignment["starter_scene"]) if one's set and
+    actually exists on disk; otherwise a plain cmds.file(new=True), same
+    as before this existed.
+
+    Only decides what the scene STARTS as -- every call site still saves
+    the result into the student's own versioned path afterward (via
+    save_scene()), same as create_or_continue_step()'s existing
+    carry-forward-from-a-prior-step branch. That save-as also means a
+    .mb starter scene ends up correctly converted into the class's flat
+    .ma convention, not just copied in under the wrong extension.
+    """
+    starter_scene = assignment.get("starter_scene")
+    if not starter_scene:
+        cmds.file(new=True, force=True)
+        return
+
+    if not os.path.isfile(starter_scene):
+        log(f"WARNING: Starter scene not found on disk: {starter_scene}; falling back to a blank scene")
+        cmds.file(new=True, force=True)
+        return
+
+    open_existing_scene(starter_scene)
+    log(f"Started from starter scene: {starter_scene}")
+
+
 def set_frame_range(frame_start, frame_end):
     cmds.playbackOptions(
         minTime=frame_start,
@@ -522,7 +552,7 @@ def create_or_continue_step(steps, current_step, save_dir, base_name, class_name
     if frame_start is None or frame_end is None:
         return False, None
 
-    cmds.file(new=True, force=True)
+    open_starter_scene_or_new(assignment)
     reference_rigs(assignment.get("rigs", []))
     if assignment.get("camera"):
         add_camera(assignment_name)
@@ -587,7 +617,7 @@ def open_or_create_step(steps, step, save_dir, base_name, class_name, assignment
         frame_start, frame_end = load_frame_range(class_name, assignment_name)
         if frame_start is None or frame_end is None:
             return False, None, None
-        cmds.file(new=True, force=True)
+        open_starter_scene_or_new(assignment)
         reference_rigs(assignment.get("rigs", []))
         if assignment.get("camera"):
             add_camera(assignment_name)
@@ -717,7 +747,7 @@ def _run_flat(class_name, assignment_name, assignment, semester, display_name, s
     if frame_start is None or frame_end is None:
         return False
 
-    cmds.file(new=True, force=True)
+    open_starter_scene_or_new(assignment)
     reference_rigs(assignment.get("rigs", []))
     if assignment.get("camera"):
         add_camera(assignment_name)
