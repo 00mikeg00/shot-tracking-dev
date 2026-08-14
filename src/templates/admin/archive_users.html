@@ -46,7 +46,9 @@
                                 data-grad-year="{{ user.graduation_year or '' }}">
                             {% endif %}
                         </td>
-                        <td class="border border-gray-300 p-3">{{ user.name }}</td>
+                        <td class="border border-gray-300 p-3">
+                            <a href="{{ url_for('users.edit_user', user_id=user.id) }}" class="text-blue-600 hover:underline">{{ user.name }}</a>
+                        </td>
                         <td class="border border-gray-300 p-3">{{ user.email }}</td>
                         <td class="border border-gray-300 p-3">{{ user.graduation_year or '—' }}</td>
                         <td class="border border-gray-300 p-3">
@@ -107,7 +109,9 @@
                     <td class="border border-gray-300 p-3 text-center text-black">
                         <input type="checkbox" name="user_ids" value="{{ user.id }}">
                     </td>
-                    <td class="border border-gray-300 p-3">{{ user.name }}</td>
+                    <td class="border border-gray-300 p-3">
+                        <a href="{{ url_for('users.edit_user', user_id=user.id) }}" class="text-blue-600 hover:underline">{{ user.name }}</a>
+                    </td>
                     <td class="border border-gray-300 p-3">{{ user.email }}</td>
                 </tr>
                 {% else %}
