@@ -17,6 +17,14 @@
                 <label for="login_name" class="block text-white font-medium">Username *</label>
                 <input type="text" id="login_name" name="login_name" class="w-full border-2 border-gray-300 rounded-lg p-2 focus:ring focus:ring-blue-300 text-black" placeholder="Enter a unique username" required>
             </div>
+
+            <!-- Graduation Year -->
+            <div>
+                <label for="graduation_year" class="block text-white font-medium">Graduation Year</label>
+                <input type="number" id="graduation_year" name="graduation_year" min="2020" max="2035"
+                    class="w-full border-2 border-gray-300 rounded-lg p-2 focus:ring focus:ring-blue-300 text-black"
+                    placeholder="e.g. 2026">
+            </div>
             
             <!-- Email -->
             <div class="grid grid-cols-3 gap-2 items-center">
@@ -102,6 +110,9 @@
 </div>
 
 <script>
+
+    const DEFAULT_PASSWORD = "00Cats00";
+
     function updateEmailPreview() {
         const emailLocal = document.getElementById('email_local').value;
         const emailDomain = document.getElementById('email_domain').value;
@@ -128,8 +139,28 @@
     const confirmPasswordField = document.getElementById('confirm_password');
     const passwordMatchMessage = document.getElementById('password-match-message');
 
-    confirmPasswordField.addEventListener('input', function() {
+    // Prefill both fields with the default password on load
+    passwordField.value = DEFAULT_PASSWORD;
+    confirmPasswordField.value = DEFAULT_PASSWORD;
+
+    function checkPasswordMatch() {
         passwordMatchMessage.textContent = passwordField.value !== confirmPasswordField.value ? 'Passwords do not match' : '';
+    }
+
+    // Keep both fields in sync as long as admin hasn't touched confirm yet.
+    // Once they edit password, re-sync confirm automatically UNLESS they've
+    // manually diverged confirm from the old password value.
+    let confirmTouched = false;
+    confirmPasswordField.addEventListener('input', function () {
+        confirmTouched = true;
+        checkPasswordMatch();
+    });
+
+    passwordField.addEventListener('input', function () {
+        if (!confirmTouched) {
+            confirmPasswordField.value = passwordField.value;
+        }
+        checkPasswordMatch();
     });
 </script>
 

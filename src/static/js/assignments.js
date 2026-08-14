@@ -89,11 +89,15 @@ document.addEventListener("DOMContentLoaded", function () {
         const assignmentName = event.target.getAttribute("data-name");
         const startDate = event.target.getAttribute("data-start-date");
         const completionDate = event.target.getAttribute("data-completion-date");
+        const frameStart = event.target.getAttribute("data-frame-start");
+        const frameEnd = event.target.getAttribute("data-frame-end");
 
         document.getElementById("edit-assignment-id").value = assignmentId;
         document.getElementById("edit-assignment-name").value = assignmentName;
         document.getElementById("edit-start-date").value = startDate;
         document.getElementById("edit-completion-date").value = completionDate;
+        document.getElementById("edit-frame-start").value = frameStart || "";
+        document.getElementById("edit-frame-end").value = frameEnd || "";
 
         document.getElementById("editAssignmentModal").classList.remove("hidden");
     });
@@ -166,11 +170,19 @@ function submitEditForm(event) {
     const name = document.getElementById("edit-assignment-name").value;
     const startDate = document.getElementById("edit-start-date").value;
     const completionDate = document.getElementById("edit-completion-date").value;
+    const frameStart = document.getElementById("edit-frame-start").value;
+    const frameEnd = document.getElementById("edit-frame-end").value;
 
     fetch(`/assignments/assignments/${assignmentId}/edit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, start_date: startDate, completion_date: completionDate }),
+        body: JSON.stringify({
+            name,
+            start_date: startDate,
+            completion_date: completionDate,
+            frame_start: frameStart || null,
+            frame_end: frameEnd || null
+        }),
     })
         .then(response => {
             if (!response.ok) throw new Error(`❌ HTTP ${response.status}`);
@@ -304,17 +316,21 @@ window.updateAssignmentsTable = function (assignments) {
                     ${assignment.name || 'N/A'}
                 </a>
             </td>
-            <td class="p-3 border-b" style="width: 140px;">${assignment.start_date || 'N/A'}</td>
-            <td class="p-3 border-b" style="width: 140px;">${assignment.completion_date || 'N/A'}</td>
+            <td class="p-3 border-b" style="width: 120px;">${assignment.start_date || 'N/A'}</td>
+            <td class="p-3 border-b" style="width: 120px;">${assignment.completion_date || 'N/A'}</td>
+            <td class="p-3 border-b" style="width: 100px;">${assignment.frame_start ?? ''}</td>
+            <td class="p-3 border-b" style="width: 100px;">${assignment.frame_end ?? ''}</td>
             <td class="p-3 border-b align-top" style="width: 500px;">
                 ${progressCellHtml}
             </td>
             <td class="p-3 border-b align-top text-center" style="width: 180px;">
                 <button class="edit-assignment-btn bg-yellow-800 hover:bg-yellow-600 text-white px-3 py-1 rounded-lg mb-2"
-                    data-id="${assignment.id}" 
-                    data-name="${assignment.name}" 
-                    data-start-date="${assignment.start_date}" 
-                    data-completion-date="${assignment.completion_date}">
+                    data-id="${assignment.id}"
+                    data-name="${assignment.name}"
+                    data-start-date="${assignment.start_date}"
+                    data-completion-date="${assignment.completion_date}"
+                    data-frame-start="${assignment.frame_start ?? ''}"
+                    data-frame-end="${assignment.frame_end ?? ''}">
                     Edit
                 </button><br>
                 <button class="bg-red-800 hover:bg-red-600 text-white px-3 py-1 rounded-lg"
@@ -388,11 +404,13 @@ window.confirmDelete = function (assignmentId, event) {
     });
 };
 
-function openEditModal(id, name, startDate, completionDate) {
+function openEditModal(id, name, startDate, completionDate, frameStart, frameEnd) {
     document.getElementById("edit-assignment-id").value = id;
     document.getElementById("edit-assignment-name").value = name;
     document.getElementById("edit-start-date").value = startDate;
     document.getElementById("edit-completion-date").value = completionDate;
+    document.getElementById("edit-frame-start").value = frameStart || "";
+    document.getElementById("edit-frame-end").value = frameEnd || "";
     document.getElementById("editAssignmentModal").classList.remove("hidden");
 }
 

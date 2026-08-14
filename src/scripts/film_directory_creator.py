@@ -6,6 +6,26 @@ import sys
 CONFIG_PATH = r"C:/Cincy/Configs/film_config_v1.json"
 OUTPUT_ROOT = r"C:/Films"
 
+# Must match CATEGORY_FOLDER_MAP in app/utils/utils.py exactly -- that's
+# what find_matching_asset_file()/ensure_asset_folder() use to look assets
+# back up, so a folder created here under a different name is invisible to
+# them. Kept as a plain local copy (not imported) since this file runs as
+# its own subprocess, not inside the Flask app.
+CATEGORY_FOLDER_MAP = {
+    "Sets": "Sets",
+    "Character/Rigs": "Rigs",
+    "Rigs": "Rigs",
+    "Props - 3D": "Props_-_3D",
+    "Props - 2D": "Props_-_2D",
+    "Light Rigs": "LightRigs",
+    "BGs": "BGs"
+}
+
+
+def category_folder_name(category):
+    """Falls back to the old generic sanitize for any category not in the map."""
+    return CATEGORY_FOLDER_MAP.get(category, category.replace("/", "_").replace(" ", "_"))
+
 def safe_print(*args, **kwargs):
     try:
         print(*args, **kwargs)
@@ -68,7 +88,9 @@ def create_film_directory(film_id, config):
             shot_dir = os.path.join(scene_dir, shot_number)
             os.makedirs(shot_dir, exist_ok=True)
 
-    for sub in ["Assets/Sets", "Assets/Rigs", "Assets/Props", "Assets/LightRigs", "Scripts", "Audio/Records", "Audio/SFX", "Audio/For Scenes", "Audio/For Shots"]:
+    asset_category_folders = sorted(set(CATEGORY_FOLDER_MAP.values()))
+    for sub in [os.path.join("Assets", folder) for folder in asset_category_folders] + \
+               ["Scripts", "Audio/Records", "Audio/SFX", "Audio/For Scenes", "Audio/For Shots"]:
         os.makedirs(os.path.join(film_root, sub), exist_ok=True)
 
     # ✅ Add Notes folder
@@ -82,9 +104,7 @@ def create_film_directory(film_id, config):
         os.makedirs(assets_root, exist_ok=True)
 
         for category, assets in assets_data.items():
-            # Normalize the category (e.g. "Character/Rigs" → "Rigs")
-            safe_cat = category.replace("/", "_").replace(" ", "_")
-            category_dir = os.path.join(assets_root, safe_cat)
+            category_dir = os.path.join(assets_root, category_folder_name(category))
             os.makedirs(category_dir, exist_ok=True)
 
             for asset in assets:

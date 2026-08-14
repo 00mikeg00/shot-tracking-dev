@@ -1313,6 +1313,35 @@ export default function MarkupTool() {
             })
             .catch(err => console.error("❌ Failed to update scene status", err));
         }
+
+        // ⭐ Mark the source file reviewed (_R) once this shot's status is
+        // Approved -- get_films_for_review() buckets a film file into
+        // "Reviewed Films" purely by checking for "_r." in the filename
+        // (see get_files_for_review.py), so without this rename an
+        // approved shot never leaves "Films to Review". Mirrors what the
+        // Scene Review Session's own Save button already does
+        // unconditionally; here it's gated on Approved since this button
+        // saves grades for statuses that aren't final yet too (Retake, etc).
+        const approvedNow = selectedItem.statuses.some(
+          (s) => (s.status || "").trim().toLowerCase() === "approved"
+        );
+        if (approvedNow && selectedItem.file_path) {
+          try {
+            const favorite =
+              typeof document !== "undefined"
+                ? document.getElementById("favoriteCheckbox")?.checked || false
+                : false;
+            const renameRes = await fetch(`${API_BASE_URL}/review/save_reviewed`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ file_path: selectedItem.file_path, favorite }),
+            });
+            const renameJson = await renameRes.json();
+            console.log("🏷️ Marked reviewed (_R):", renameJson);
+          } catch (err) {
+            console.error("❌ Failed to mark file reviewed (_R):", err);
+          }
+        }
       }
 
       Swal.fire({
@@ -1548,6 +1577,115 @@ export default function MarkupTool() {
 
           const videoUrl = `${API_BASE_URL}/review/get_video?path=${encodeURIComponent(file.file_path)}`;
           setSelectedFile(videoUrl);
+
+          // 🖊️ Planning drawings (still images, DB-backed via planning_files)
+          // — handled entirely separately from the video/assignment logic
+          // below. A Planning set can have several current images per
+          // individual_assignment_id, so annotations must be loaded per
+          // exact file_path, NOT via /review/get_annotations?id=, which
+          // returns whatever's newest for the whole assignment and would
+          // leak one drawing's markup onto another.
+          if (file.is_planning_drawing) {
+            resetStoryboardState();
+            setSelectedFile(videoUrl);
+
+            setSelectedItem({
+              ...file,
+              type: "assignment",
+              isSB: false,
+              statuses: [],
+            });
+            setSelectedAssignment({
+              ...file,
+              assignment_name: file.file_name?.split("_")[0] || "Planning Drawing",
+              student_name: "",
+              isSB: false,
+              statuses: [],
+            });
+
+            if (file.individual_assignment_id) {
+              fetchAssignmentStatus(file.individual_assignment_id);
+            }
+
+            setFrameAnnotations({});
+            const isReviewedDrawing = /_R\.(png|jpe?g)$/i.test(file.file_path);
+            if (isReviewedDrawing) {
+              const jsonPath = file.file_path.replace(/_R\.(png|jpe?g)$/i, "_R.json");
+              fetch(`${API_BASE_URL}/review/get_annotation_file?path=${encodeURIComponent(jsonPath)}`)
+                .then((res) => {
+                  if (!res.ok) {
+                    if (res.status === 404) return null;
+                    throw new Error(`HTTP ${res.status}`);
+                  }
+                  return res.json();
+                })
+                .then((data) => {
+                  if (data && typeof data === "object") {
+                    setFrameAnnotations(data);
+                    setCurrentFrame(1);
+                    clearCanvasRef.current?.();
+                    redrawCanvasRef.current?.();
+                  }
+                })
+                .catch((err) => console.warn("❌ Could not load planning drawing annotations:", err));
+            }
+
+            return;
+          }
+
+          // 🎥 Video references (converted .webm uploads, DB-backed via
+          // video_reference_files) — same per-file annotation isolation as
+          // planning drawings above, for the same reason: a student can
+          // have several reference clips on one assignment. Link-type
+          // entries never reach here -- SideBar opens those in a new tab
+          // instead of calling handleFileClick.
+          if (file.is_video_reference) {
+            resetStoryboardState();
+            setSelectedFile(videoUrl);
+
+            setSelectedItem({
+              ...file,
+              type: "assignment",
+              isSB: false,
+              statuses: [],
+            });
+            setSelectedAssignment({
+              ...file,
+              assignment_name: file.file_name?.split("_")[0] || "Video Reference",
+              student_name: "",
+              isSB: false,
+              statuses: [],
+            });
+
+            if (file.individual_assignment_id) {
+              fetchAssignmentStatus(file.individual_assignment_id);
+            }
+
+            setFrameAnnotations({});
+            const isReviewedRef = /_R\.webm$/i.test(file.file_path);
+            if (isReviewedRef) {
+              const jsonPath = file.file_path.replace(/_R\.webm$/i, "_R.json");
+              fetch(`${API_BASE_URL}/review/get_annotation_file?path=${encodeURIComponent(jsonPath)}`)
+                .then((res) => {
+                  if (!res.ok) {
+                    if (res.status === 404) return null;
+                    throw new Error(`HTTP ${res.status}`);
+                  }
+                  return res.json();
+                })
+                .then((data) => {
+                  if (data && typeof data === "object") {
+                    setFrameAnnotations(data);
+                    setCurrentFrame(1);
+                    clearCanvasRef.current?.();
+                    redrawCanvasRef.current?.();
+                  }
+                })
+                .catch((err) => console.warn("❌ Could not load video reference annotations:", err));
+            }
+
+            return;
+          }
 
           // 🎞️ Detect Storyboard movie EARLY (e.g., testme_040_SB_v1.webm)
           const isStoryboard = file.file_name && /_\d{3}_SB_/i.test(file.file_name);
@@ -2007,6 +2145,33 @@ export default function MarkupTool() {
                                     });
                                     const json = await res.json();
                                     console.log("✅ Scene status update result:", json);
+
+                                    // ⭐ Mark reviewed (_R) the moment a step is set to
+                                    // Approved. This onChange -- not the Save button --
+                                    // is what actually persists a film shot's status, and
+                                    // it never syncs selectedItem/selectedAssignment
+                                    // .statuses back into state, so a later Save click
+                                    // can't reliably see "just got approved" from state.
+                                    if (
+                                      newStatus.trim().toLowerCase() === "approved" &&
+                                      selectedAssignment?.file_path
+                                    ) {
+                                      try {
+                                        const favorite =
+                                          typeof document !== "undefined"
+                                            ? document.getElementById("favoriteCheckbox")?.checked || false
+                                            : false;
+                                        const renameRes = await fetch(`${API_BASE_URL}/review/save_reviewed`, {
+                                          method: "POST",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ file_path: selectedAssignment.file_path, favorite }),
+                                        });
+                                        const renameJson = await renameRes.json();
+                                        console.log("🏷️ Marked reviewed (_R):", renameJson);
+                                      } catch (err) {
+                                        console.error("❌ Failed to mark file reviewed (_R):", err);
+                                      }
+                                    }
                                   } catch (err) {
                                     console.error("❌ Failed to update scene status:", err);
                                   }

@@ -50,6 +50,7 @@ def query_users(filters=None, limit=None, offset=None):
     FROM users
     LEFT JOIN user_groups ON users.id = user_groups.user_id
     LEFT JOIN groups ON user_groups.group_id = groups.id
+    WHERE users.archived = 0
     """
     params = []
 
@@ -62,8 +63,7 @@ def query_users(filters=None, limit=None, offset=None):
             filter_clauses.append("users.id = ?")
             params.append(filters['id'])
         if filter_clauses:
-            query += " WHERE " + " AND ".join(filter_clauses)
-
+            query += " AND " + " AND ".join(filter_clauses)
 
     query += """
     GROUP BY users.id
@@ -277,7 +277,7 @@ def get_assignments(class_id):
 def get_assignments_by_class(class_id, conn):
     """Fetch all assignments for a given class."""
     query = """
-        SELECT DISTINCT id, name, description, start_date, completion_date
+        SELECT DISTINCT id, name, description, start_date, completion_date, frame_start, frame_end
         FROM assignments
         WHERE class_id = ?
     """
@@ -293,10 +293,15 @@ def add_assignment_to_db(assignment_data):
         # Auto-calculate max_points from parent_step_id
         max_points_map = {1: 4, 2: 16, 342: 8}
         max_points = max_points_map.get(int(assignment_data["parent_step_id"]), 4)
+        # Captured once here and reused below for individual_assignments --
+        # the X-sheet frame range is a snapshot at creation time, not a
+        # live join, so it stays put even if the assignment is edited later.
+        frame_start = assignment_data.get("frame_start") or None
+        frame_end = assignment_data.get("frame_end") or None
 
         cursor.execute("""
-            INSERT INTO assignments (class_id, name, start_date, completion_date, parent_step_id, progress_step_id, max_points)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO assignments (class_id, name, start_date, completion_date, parent_step_id, progress_step_id, max_points, frame_start, frame_end)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             assignment_data["class_id"],
             assignment_data["name"],
@@ -304,7 +309,9 @@ def add_assignment_to_db(assignment_data):
             assignment_data["completion_date"],
             assignment_data["parent_step_id"],
             assignment_data["progress_step_ids"][0],
-            max_points
+            max_points,
+            frame_start,
+            frame_end
         ))
         assignment_id = cursor.lastrowid
         print(f"[OK] Assignment {assignment_id} created successfully.")
@@ -347,15 +354,17 @@ def add_assignment_to_db(assignment_data):
         # [OK] Create individual assignments + status records
         for student in students:
             cursor.execute("""
-                INSERT INTO individual_assignments 
-                (assignment_id, users_id, name, start_date, completion_date)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO individual_assignments
+                (assignment_id, users_id, name, start_date, completion_date, frame_start, frame_end)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 assignment_id,
                 student["user_id"],
                 assignment_data["name"],
                 assignment_data["start_date"],
-                assignment_data["completion_date"]
+                assignment_data["completion_date"],
+                frame_start,
+                frame_end
             ))
             individual_assignment_id = cursor.lastrowid
 
@@ -523,7 +532,7 @@ def get_assignment_name_by_id(assignment_id):
     conn = get_db()
     return conn.execute(query, (assignment_id,)).fetchone()['name']
 
-def update_assignment(assignment_id, name, start_date, completion_date):
+def update_assignment(assignment_id, name, start_date, completion_date, frame_start=None, frame_end=None):
     """Update an assignment and its associated individual assignments."""
     conn = get_db()
     try:
@@ -532,9 +541,9 @@ def update_assignment(assignment_id, name, start_date, completion_date):
         # [OK] Update the main assignment
         cursor.execute("""
             UPDATE assignments
-            SET name = ?, start_date = ?, completion_date = ?
+            SET name = ?, start_date = ?, completion_date = ?, frame_start = ?, frame_end = ?
             WHERE id = ?
-        """, (name, start_date, completion_date, assignment_id))
+        """, (name, start_date, completion_date, frame_start, frame_end, assignment_id))
 
         # [OK] Update individual assignments linked to this assignment
         cursor.execute("""
@@ -616,13 +625,13 @@ def get_individual_assignments_by_assignment(assignment_id, conn):
     """
     return [dict(row) for row in conn.execute(query, (assignment_id,)).fetchall()]
 
-def add_individual_assignment(assignment_id, users_id, assignment_name, start_date, completion_date, current_status):
+def add_individual_assignment(assignment_id, users_id, assignment_name, start_date, completion_date, current_status, frame_start=None, frame_end=None):
     """Add an individual assignment and initialize statuses for each step."""
     print(f"Adding Individual Assignment: {assignment_id}, {users_id}, {assignment_name}, {start_date}, {completion_date}, {current_status}")
 
     insert_query = """
-    INSERT INTO individual_assignments (assignment_id, users_id, name, start_date, completion_date)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO individual_assignments (assignment_id, users_id, name, start_date, completion_date, frame_start, frame_end)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     """
 
     conn = get_db()
@@ -633,7 +642,9 @@ def add_individual_assignment(assignment_id, users_id, assignment_name, start_da
             users_id,
             assignment_name,
             start_date,
-            completion_date
+            completion_date,
+            frame_start,
+            frame_end
         ))
         individual_assignment_id = cursor.lastrowid
 
@@ -912,10 +923,30 @@ def get_all_steps():
 def get_unarchived_classes():
     """Fetch all unarchived classes."""
     query = """
-        SELECT id, class_name, year, semester, archived
-        FROM classes
-        WHERE archived = 0
-        ORDER BY year DESC, semester DESC
+        SELECT c.id, c.class_name, s.year, s.term AS semester, c.archived
+        FROM classes c
+        LEFT JOIN semesters s ON c.semester_id = s.id
+        WHERE c.archived = 0
+        ORDER BY s.year DESC,
+            CASE s.term
+                WHEN 'Spring' THEN 1
+                WHEN 'Summer' THEN 2
+                WHEN 'Fall' THEN 3
+            END
+    """
+    conn = get_db()
+    return [dict(row) for row in conn.execute(query)]
+
+def get_archived_classes():
+    """Fetch all archived classes, with semester label resolved."""
+    query = """
+        SELECT
+            c.id, c.class_name, c.code, c.class_number, c.archived,
+            s.year, s.term, s.year || '-' || s.term AS semester_label
+        FROM classes c
+        LEFT JOIN semesters s ON s.id = c.semester_id
+        WHERE c.archived = 1
+        ORDER BY s.year DESC, s.term DESC
     """
     conn = get_db()
     return [dict(row) for row in conn.execute(query)]
@@ -931,13 +962,48 @@ def get_unarchived_users():
     conn = get_db()
     return [dict(row) for row in conn.execute(query)]
 
-def get_unarchived_films():
-    """Fetch all films that are not archived."""
+def get_archived_users():
+    """Fetch all archived users."""
     query = """
-        SELECT id, title, release_date, director
-        FROM films
-        WHERE archived = 0
-        ORDER BY release_date DESC
+        SELECT id, name, email, created_at
+        FROM users
+        WHERE archived = 1
+        ORDER BY name
+    """
+    conn = get_db()
+    return [dict(row) for row in conn.execute(query)]
+
+def get_unarchived_films():
+    """Fetch all films that are not archived, with director name and semester label resolved."""
+    query = """
+        SELECT
+            f.id,
+            f.name,
+            f.description,
+            f.created_at,
+            u.name AS director_name,
+            s.year || '-' || s.term AS semester_label
+        FROM films f
+        LEFT JOIN users u ON u.id = f.director_id
+        LEFT JOIN semesters s ON s.id = f.semester_id
+        WHERE f.archived = 0
+        ORDER BY f.created_at DESC
+    """
+    conn = get_db()
+    return [dict(row) for row in conn.execute(query)]
+
+def get_archived_films():
+    """Fetch all archived films, with director name and semester label resolved."""
+    query = """
+        SELECT
+            f.id, f.name, f.description, f.created_at,
+            u.name AS director_name,
+            s.year || '-' || s.term AS semester_label
+        FROM films f
+        LEFT JOIN users u ON u.id = f.director_id
+        LEFT JOIN semesters s ON s.id = f.semester_id
+        WHERE f.archived = 1
+        ORDER BY f.created_at DESC
     """
     conn = get_db()
     return [dict(row) for row in conn.execute(query)]

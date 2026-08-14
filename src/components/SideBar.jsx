@@ -73,8 +73,9 @@ export default function SideBar({
         THUMB: "Thumbnails",
         SB: "Storyboards",
         LAY: "FB Layout",
+        BL: "FB Blocking",
         ANIM: "FB Animation",
-        LIGHT: "FB Lighting"
+        LGT: "FB Lighting"
         // Expand as needed
     };
       
@@ -149,7 +150,14 @@ export default function SideBar({
             (
                 file.file_name.endsWith(".webm") ||
                 file.file_name.endsWith(".mov") ||
-                file.file_name.endsWith(".mp4")
+                file.file_name.endsWith(".mp4") ||
+                // Planning drawings (still images) — additive to the video
+                // extensions above, not a replacement.
+                file.is_planning_drawing ||
+                /\.(png|jpe?g)$/i.test(file.file_name) ||
+                // Video references — uploads are already .webm (covered
+                // above); links use a synthetic .url name.
+                file.is_video_reference
             )
         );
     };
@@ -159,6 +167,126 @@ export default function SideBar({
         if (!searchTerm) return files;
         const term = searchTerm.toLowerCase();
         return files.filter(file => file.file_name?.toLowerCase().includes(term));
+    };
+
+    // Planning entries (drawings + video references) get Assignment ->
+    // Student -> bundle grouping instead of the flat list everything else
+    // uses -- a student now has several pieces per assignment (drawings,
+    // video ref, eventually x-sheet), and grading them meant scrolling
+    // through everyone's files interleaved alphabetically. Everything
+    // else (Blocking, Blocking Plus, Polish, regular video review) keeps
+    // its existing flat structure untouched.
+    const isPlanningEntry = (file) => !!(file.is_planning_drawing || file.is_video_reference);
+    const splitPlanning = (files) => [
+        files.filter(isPlanningEntry),
+        files.filter((f) => !isPlanningEntry(f)),
+    ];
+
+    // One shared <li> renderer for both the flat (non-Planning) lists and
+    // the Planning student bundles below -- same click/delete behavior
+    // either way, just reused instead of duplicated a third time.
+    const renderFileItem = (file, idx) => (
+        <li
+            key={idx}
+            className="cursor-pointer hover:bg-gray-700 px-2 py-1 rounded-md text-sm"
+            onClick={() => {
+                // Link-type video references aren't a servable local file --
+                // there's nothing for the player to load, just open it
+                // where it lives.
+                if (file.is_video_reference && file.source_type === "link") {
+                    window.open(file.external_url, "_blank", "noopener,noreferrer");
+                    return;
+                }
+                setSelectedAssignment?.(file);
+                handleFileClick(file, "assignments");
+            }}
+            onContextMenu={(e) => {
+                e.preventDefault();
+                import("sweetalert2").then(({ default: Swal }) => {
+                    Swal.fire({
+                        title: `Delete this file?`,
+                        text: file.file_name,
+                        icon: "warning",
+                        showCancelButton: true,
+                        confirmButtonColor: "#d33",
+                        cancelButtonColor: "#3085d6",
+                        confirmButtonText: "Yes, delete it!",
+                    }).then((result) => {
+                        if (result.isConfirmed) {
+                            fetch(`${apiBaseUrl}/review/delete_file?path=${encodeURIComponent(file.file_path)}`, {
+                                method: "DELETE",
+                            })
+                                .then((res) => res.json())
+                                .then((json) => {
+                                    if (json.success) {
+                                        Swal.fire("Deleted!", "Your file has been deleted.", "success").then(() => {
+                                            window.location.reload();
+                                        });
+                                    } else {
+                                        Swal.fire("Error", json.error || "Delete failed", "error");
+                                    }
+                                })
+                                .catch((err) => Swal.fire("Error", err.message || "Delete failed", "error"));
+                        }
+                    });
+                });
+            }}
+        >
+            {file.is_video_reference
+                ? (file.source_type === "link" ? "🔗 Video reference (link)" : "🎥 " + file.file_name)
+                : <>📄 {file.file_name}</>}
+        </li>
+    );
+
+    // Assignment -> Student -> bundle, for Planning entries only. keyPrefix
+    // scopes the openClasses persistence keys to whichever section/class
+    // this is rendered under, so "Assignments to Review" and "Classes"
+    // don't fight over the same expand/collapse state.
+    const renderPlanningBundles = (planningFiles, keyPrefix) => {
+        const byAssignment = {};
+        for (const file of planningFiles) {
+            const aName = file.assignment_name || "Unknown Assignment";
+            const sName = file.student_name || "Unknown Student";
+            if (!byAssignment[aName]) byAssignment[aName] = {};
+            if (!byAssignment[aName][sName]) byAssignment[aName][sName] = [];
+            byAssignment[aName][sName].push(file);
+        }
+
+        return Object.entries(byAssignment).map(([assignmentName, byStudent]) => {
+            const assignmentKey = `${keyPrefix}::planning::${assignmentName.replace(/[^a-zA-Z0-9 ]/g, "_")}`;
+            return (
+                <div key={assignmentKey} className="ml-2 mt-1">
+                    <div
+                        className="cursor-pointer font-semibold text-yellow-300"
+                        onClick={() => toggleClass(assignmentKey)}
+                    >
+                        {openClasses[assignmentKey] ? "📂" : "📁"} {assignmentName}
+                    </div>
+                    {openClasses[assignmentKey] && (
+                        <div className="ml-4">
+                            {Object.entries(byStudent).map(([studentName, files]) => {
+                                const studentKey = `${assignmentKey}::${studentName.replace(/[^a-zA-Z0-9 ]/g, "_")}`;
+                                return (
+                                    <div key={studentKey} className="ml-2 mt-1">
+                                        <div
+                                            className="cursor-pointer font-semibold text-purple-300"
+                                            onClick={() => toggleClass(studentKey)}
+                                        >
+                                            {openClasses[studentKey] ? "👤" : "👤"} {studentName}
+                                        </div>
+                                        {openClasses[studentKey] && (
+                                            <ul className="ml-4">
+                                                {files.map((file, idx) => renderFileItem(file, idx))}
+                                            </ul>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            );
+        });
     };
 
 
@@ -216,10 +344,12 @@ export default function SideBar({
                         </div>
 
                         {/* Only show files if open */}
-                            {isOpen && (
+                            {isOpen && (() => {
+                                const [planningFiles, nonPlanningFiles] = splitPlanning(files);
+                                return (
                                 <div className="ml-4">
                                     {Object.entries(
-                                        files.reduce((acc, file) => {
+                                        nonPlanningFiles.reduce((acc, file) => {
                                             const baseName = file.file_name.replace(/\.[^/.]+$/, "");
                                             const displayName = baseName.split("_")[0].trim(); // e.g. "Pose #4"
 
@@ -260,9 +390,11 @@ export default function SideBar({
                                             </div>
                                         );
                                     })}
+                                    {renderPlanningBundles(planningFiles, uniqueKey)}
                                 </div>
-                            )}
-    
+                                );
+                            })()}
+
 
                         </div>
                     );
@@ -362,10 +494,12 @@ export default function SideBar({
                                                     {openClasses[uniqueKey] ? "📂" : "📁"} {className}
                                                 </div>
 
-                                                {openClasses[uniqueKey] && (
+                                                {openClasses[uniqueKey] && (() => {
+                                                    const [planningFiles, nonPlanningFiles] = splitPlanning(filteredFiles);
+                                                    return (
                                                     <div className="ml-4">
                                                         {Object.entries(
-                                                            filteredFiles.reduce((acc, file) => {
+                                                            nonPlanningFiles.reduce((acc, file) => {
                                                                 const baseName = file.file_name.replace(/\.[^/.]+$/, ""); // strip extension
                                                                 const firstUnderscore = baseName.indexOf("_");
 
@@ -392,71 +526,16 @@ export default function SideBar({
 
                                                                     {openClasses[safeAssignmentKey] && (
                                                                         <ul className="ml-4">
-                                                                            {files.map((file, idx) => (
-                                                                                <li
-                                                                                    key={idx}
-                                                                                    className="cursor-pointer hover:bg-gray-700 px-2 py-1 rounded-md text-sm"
-                                                                                    onClick={() => {
-                                                                                        setSelectedAssignment?.(file);
-                                                                                        handleFileClick(file, "assignments");
-                                                                                    }}
-                                                                                    onContextMenu={(e) => {
-                                                                                        e.preventDefault();
-                                                                                        import("sweetalert2").then(({ default: Swal }) => {
-                                                                                            Swal.fire({
-                                                                                                title: `Delete this file?`,
-                                                                                                text: file.file_name,
-                                                                                                icon: "warning",
-                                                                                                showCancelButton: true,
-                                                                                                confirmButtonColor: "#d33",
-                                                                                                cancelButtonColor: "#3085d6",
-                                                                                                confirmButtonText: "Yes, delete it!",
-                                                                                            }).then((result) => {
-                                                                                                if (result.isConfirmed) {
-                                                                                                    fetch(
-                                                                                                        `${apiBaseUrl}/review/delete_file?path=${encodeURIComponent(file.file_path)}`,
-                                                                                                        { method: "DELETE" }
-                                                                                                    )
-                                                                                                        .then((res) => res.json())
-                                                                                                        .then((json) => {
-                                                                                                            if (json.success) {
-                                                                                                                Swal.fire(
-                                                                                                                    "Deleted!",
-                                                                                                                    "Your file has been deleted.",
-                                                                                                                    "success"
-                                                                                                                ).then(() => {
-                                                                                                                    window.location.reload();
-                                                                                                                });
-                                                                                                            } else {
-                                                                                                                Swal.fire(
-                                                                                                                    "Error",
-                                                                                                                    json.error || "Delete failed",
-                                                                                                                    "error"
-                                                                                                                );
-                                                                                                            }
-                                                                                                        })
-                                                                                                        .catch((err) =>
-                                                                                                            Swal.fire(
-                                                                                                                "Error",
-                                                                                                                err.message || "Delete failed",
-                                                                                                                "error"
-                                                                                                            )
-                                                                                                        );
-                                                                                                }
-                                                                                            });
-                                                                                        });
-                                                                                    }}
-                                                                                >
-                                                                                    📄 {file.file_name}
-                                                                                </li>
-                                                                            ))}
+                                                                            {files.map((file, idx) => renderFileItem(file, idx))}
                                                                         </ul>
                                                                     )}
                                                                 </div>
                                                             );
                                                         })}
+                                                        {renderPlanningBundles(planningFiles, uniqueKey)}
                                                     </div>
-                                                )}
+                                                    );
+                                                })()}
 
 
                                             </div>

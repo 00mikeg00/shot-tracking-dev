@@ -33,6 +33,18 @@
             </div>
 
             <div class="mt-4">
+                <label for="aspect_ratio" class="block text-white font-medium">Render Aspect Ratio:</label>
+                <select id="aspect_ratio" name="aspect_ratio"
+                    class="w-full border text-gray-900 bg-white rounded-lg p-2" required>
+                    {% for preset in aspect_ratio_presets %}
+                    <option value="{{ preset.value }}" {% if preset.value==film.aspect_ratio %}selected{% endif %}>
+                        {{ preset.label }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="mt-4">
                 <label for="step_id" class="block text-white font-medium">Overall Film Workflow:</label>
                 <select id="step_id" name="step_id" class="w-full border text-gray-900 bg-white rounded-lg p-2"
                     required>
@@ -77,6 +89,106 @@
                     Changes</button>
             </div>
         </form>
+
+        <!-- Pre-Production Steps -->
+        <div class="mt-8 pt-6 border-t border-red-800">
+            <h3 class="text-xl font-bold text-white mb-3">Pre-Production Steps</h3>
+            {% if prepro_flows %}
+            <div class="space-y-3">
+                {% for flow in prepro_flows %}
+                <div class="flex items-center justify-between bg-red-950 rounded-lg px-4 py-2">
+                    <span class="text-white font-semibold">{{ flow.step_name }}</span>
+                    <form id="status-update-form-{{ film.id }}-{{ flow.step_id }}"
+                        onsubmit="updateFilmStepStatus(event, {{ film.id }}, {{ flow.step_id }})">
+                        <input type="hidden" name="film_id" value="{{ film.id }}">
+                        <input type="hidden" name="step_id" value="{{ flow.step_id }}">
+                        <select name="node_id" class="text-black rounded px-2 py-1 text-sm"
+                            onchange="updateFilmStepStatus(event, {{ film.id }}, {{ flow.step_id }})"
+                            style="background-color: {{ flow.nodes | selectattr('node_id','equalto',flow.selected_node_id) | map(attribute='color') | first or '#fff' }};">
+                            {% for node in flow.nodes %}
+                            <option value="{{ node.node_id }}" {% if node.node_id==flow.selected_node_id %}selected{% endif %}
+                                style="background-color: {{ node.color }};">
+                                {{ node.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </form>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <span class="text-gray-400 italic">No pre-production steps found for this film's workflow.</span>
+            {% endif %}
+        </div>
     </div>
 </div>
+
+<!-- Scene Creation Modal -->
+<div id="sceneCreationModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+  <div class="bg-white rounded-lg p-6 w-96 text-black">
+    <h2 class="text-xl font-bold mb-4">🎬 Start Creating Scenes</h2>
+    <p class="mb-4">Pre-production is complete. You can now add scenes for this film.</p>
+    <a href="{{ url_for('films.view_scenes', film_id=film.id) }}"
+      class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg block text-center">
+      Go to Scenes
+    </a>
+  </div>
+</div>
+
+<script>
+  function updateFilmStepStatus(event, filmId, stepId) {
+    event.preventDefault();
+
+    const form = event.target.closest('form');
+    const selectedNodeId = form.querySelector("select[name='node_id']").value;
+
+    if (!selectedNodeId) {
+      Swal.fire({ title: "Error", text: "Status is required", icon: "error" });
+      return;
+    }
+
+    fetch(`/films/${filmId}/steps/${stepId}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: selectedNodeId })
+    })
+      .then(response => {
+        if (!response.ok) throw new Error(`Failed to update status (${response.status})`);
+        return response.json();
+      })
+      .then(data => {
+        if (data.success) {
+          checkPreproComplete(filmId);
+        } else {
+          Swal.fire({ title: "Error", text: data.message || "Unexpected error occurred.", icon: "error" });
+        }
+      })
+      .catch(error => {
+        console.error("Error updating status:", error);
+        Swal.fire({ title: "Unexpected Error", text: "An error occurred while updating status.", icon: "error" });
+      });
+  }
+
+  async function checkPreproComplete(filmId) {
+    try {
+      const res = await fetch(`/films/api/film_status/${filmId}`);
+      const filmNodeIds = await res.json();
+      if (!Array.isArray(filmNodeIds) || filmNodeIds.length === 0) return;
+
+      const nodesRes = await fetch(`/films/api/nodes`);
+      const nodes = await nodesRes.json();
+      const approvedNodeIds = nodes.filter(node => node.name === "Approved").map(node => node.node_id);
+
+      const allApproved = filmNodeIds.every(nodeId => approvedNodeIds.includes(nodeId));
+      const modal = document.getElementById("sceneCreationModal");
+      if (allApproved) {
+        if (modal) modal.classList.remove("hidden");
+      } else if (modal) {
+        modal.classList.add("hidden");
+      }
+    } catch (err) {
+      console.error("Error checking prepro status:", err);
+    }
+  }
+</script>
 {% endblock %}

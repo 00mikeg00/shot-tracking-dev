@@ -222,6 +222,60 @@ function confirmDeleteShot(shotId) {
   });
 }
 
+function approveShotStep(button, endpoint, stepLabel, nextStepLabel) {
+  const shotId = button.dataset.shotId;
+  const loginName = button.dataset.loginName;
+
+  const text = nextStepLabel
+    ? `Locks ${stepLabel} for this shot and makes ${nextStepLabel} reachable.`
+    : `Locks ${stepLabel} for this shot.`;
+
+  Swal.fire({
+    title: `Approve this shot's ${stepLabel}?`,
+    text: text,
+    icon: 'question',
+    showCancelButton: true,
+    confirmButtonColor: '#15803d',
+    cancelButtonColor: '#3085d6',
+    confirmButtonText: 'Yes, approve it',
+    cancelButtonText: 'Cancel'
+  }).then((result) => {
+    if (!result.isConfirmed) return;
+
+    fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shot_id: shotId, login_name: loginName })
+    })
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) {
+          Swal.fire('Error', data.error || `Could not approve ${stepLabel}.`, 'error');
+          return;
+        }
+        const warning = data.timeline_warning ? `\n\n${data.timeline_warning}` : '';
+        Swal.fire('Approved', `${stepLabel} approved.${warning}`, data.timeline_warning ? 'warning' : 'success')
+          .then(() => location.reload());
+      })
+      .catch(() => {
+        Swal.fire('Error', 'Could not reach Shot Tracker.', 'error');
+      });
+  });
+}
+
+function approveShotLayout(button) {
+  approveShotStep(button, '/classes/api/launcher/capstone/shot-layout/approve', 'Layout', 'Animation');
+}
+
+function approveShotAnimation(button) {
+  approveShotStep(button, '/classes/api/launcher/capstone/shot-animation/approve', 'Animation', 'Lighting');
+}
+
+function approveShotLighting(button) {
+  // No next-step gate to mention -- Comp is out of scope for this phase.
+  approveShotStep(button, '/classes/api/launcher/capstone/shot-lighting/approve', 'Lighting', null);
+}
+
 // Bulk Edit Logic
 
 function openBulkEditModal() {

@@ -104,12 +104,50 @@ def flash_and_redirect(message: str, category: str, endpoint: str, **kwargs):
 # ASSETS
 #---------------------------------------------------------------------------------
 
+ASSET_ROOT = r"\\GAAAP1PRD01W\Films"
+
+# Single source of truth for category -> on-disk folder name, shared by
+# find_matching_asset_file() (lookup) and ensure_asset_folder() (creation)
+# so a newly created asset's folder is always the one later lookups will
+# actually search.
 CATEGORY_FOLDER_MAP = {
+    "Sets": "Sets",
     "Character/Rigs": "Rigs",
+    "Rigs": "Rigs",
     "Props - 3D": "Props_-_3D",
     "Props - 2D": "Props_-_2D",
-    "Light Rigs": "Lights",
+    "Light Rigs": "LightRigs",
+    "BGs": "BGs"
 }
+
+
+def get_asset_category_dir(film_title, category):
+    """Returns Assets/<Category>/ for this film, or None for an unmapped category."""
+    folder = CATEGORY_FOLDER_MAP.get(category)
+    if not folder:
+        return None
+    return os.path.join(ASSET_ROOT, film_title, "Assets", folder)
+
+
+def ensure_asset_folder(film_title, category, asset_name):
+    """
+    Creates Assets/<Category>/<Asset Name>/ on disk if it doesn't already
+    exist, so a newly added asset has somewhere to save files into right
+    away instead of only getting a folder the next time someone regenerates
+    folders from the film config. Returns the folder path, or None if the
+    category isn't mapped or asset_name is empty.
+    """
+    if not asset_name:
+        return None
+    asset_name = asset_name.strip()
+
+    category_dir = get_asset_category_dir(film_title, category)
+    if not category_dir:
+        return None
+
+    asset_dir = os.path.join(category_dir, asset_name)
+    os.makedirs(asset_dir, exist_ok=True)
+    return asset_dir
 
 
 def find_matching_asset_file(film_title, category, asset_name):
@@ -118,6 +156,13 @@ def find_matching_asset_file(film_title, category, asset_name):
     NAME[_anything]_v###.mb
     inside:
     Assets/<Category>/<Asset Name>/
+
+    Proxy files (_PROXY_-tagged) are excluded -- Proxy is a separate,
+    independent lineage from Modeling/Texture-Surface/Rigging (see
+    Assets.py's find_latest_asset_version(), which mirrors this same
+    exclusion on the Maya side). Without it, a brand-new asset with only a
+    Proxy file would get its official production file_path resolved to
+    the proxy instead of staying unset until real production work exists.
     """
 
     if not asset_name:
@@ -125,29 +170,9 @@ def find_matching_asset_file(film_title, category, asset_name):
 
     asset_name = asset_name.strip()
 
-    ASSET_ROOT = r"\\GAAAP1PRD01W\Films"
-
-    category_map = {
-        "Sets": "Sets",
-        "Character/Rigs": "Rigs",
-        "Rigs": "Rigs",
-        "Props - 3D": "Props_-_3D",
-        "Props - 2D": "Props_-_2D",
-        "Light Rigs": "LightRigs",
-        "BGs": "BGs"
-    }
-
-    folder = category_map.get(category)
-    if not folder:
+    category_dir = get_asset_category_dir(film_title, category)
+    if not category_dir:
         return None
-
-    # 🔑 CATEGORY LEVEL
-    category_dir = os.path.join(
-        ASSET_ROOT,
-        film_title,
-        "Assets",
-        folder
-    )
 
     if not os.path.isdir(category_dir):
         return None
@@ -162,7 +187,7 @@ def find_matching_asset_file(film_title, category, asset_name):
     safe_name = re.escape(asset_name).replace(r"\ ", r"[ _]")
 
     pattern = re.compile(
-        rf"^{safe_name}.*?_v(\d+)\.mb$",
+        rf"^{safe_name}.*?_v(\d+)\.(ma|mb)$",
         re.IGNORECASE
     )
 
@@ -170,6 +195,8 @@ def find_matching_asset_file(film_title, category, asset_name):
     best_file = None
 
     for filename in os.listdir(asset_dir):
+        if "_PROXY_" in filename.upper():
+            continue
         match = pattern.match(filename)
         if not match:
             continue

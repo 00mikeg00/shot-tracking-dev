@@ -214,7 +214,7 @@
               <td class="px-3 py-2">{{ shot.assignee or "—" }}</td>
               <td class="px-4 py-2">
                 <div class="flex flex-row gap-4 overflow-x-auto py-1">
-                  {% for step in shot.steps if step.step_name != "Thumbnails" and step.step_name != "FB Thumbnails" %}
+                  {% for step in shot.steps if step.step_name != "Thumbnails" and step.step_name != "FB Thumbnails" and step.status != "Approved" %}
                   <div class="flex flex-col bg-gray-800 px-2 py-1 rounded text-xs min-w-[220px]"
                     data-step-column-id="{{ step.step_id }}">
                     <label class="text-[10px] text-gray-300">{{ step.step_name }}</label>
@@ -253,7 +253,12 @@
                 </div>
               </td>
 
-              <td class="px-3 py-2">
+              <td class="px-3 py-2 whitespace-nowrap">
+                <button type="button" class="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs"
+                  onclick="openShotStepPicker({{ shot.id }})"
+                  title="Open any of this shot's files in Maya, regardless of approval state">
+                  🎬 Open
+                </button>
                 <button type="button" class="bg-red-800 hover:bg-red-600 text-white px-3 py-1 rounded text-xs"
                   onclick="confirmDeleteShot({{ shot.id }})">
                   Delete Shot
@@ -370,6 +375,39 @@
 
 
   <script>
+    window.currentLoginName = {{ session.get('login_name', '') | tojson }};
+
+    // Coordinator picker: open any of this shot's files regardless of
+    // approval state (Layout is scene-gated only, Animation/Lighting are
+    // opened as-is if a file exists -- CapstoneAnimation.py/CapstoneLighting.py
+    // only block creating a brand-new file, never reopening an existing one).
+    function openShotStepPicker(shotId) {
+      Swal.fire({
+        title: "Open — which file?",
+        input: "select",
+        inputOptions: {
+          "Layout": "Layout",
+          "Animation": "Animation",
+          "Lighting": "Lighting"
+        },
+        inputPlaceholder: "Select a step",
+        showCancelButton: true,
+        confirmButtonText: "Open in Maya",
+        inputValidator: (value) => !value && "Please select a step"
+      }).then((result) => {
+        if (!result.isConfirmed || !result.value) return;
+        const actionMap = {
+          "Layout": "shot_layout",
+          "Animation": "shot_animation",
+          "Lighting": "shot_lighting"
+        };
+        const loginName = window.currentLoginName || "";
+        window.location.href =
+          `shottracker://open?action=${actionMap[result.value]}&shot_id=${shotId}` +
+          `&login_name=${encodeURIComponent(loginName)}`;
+      });
+    }
+
     // Simple Open/Close for Testing
     function openBulkEditModal() {
       const modal = document.getElementById("bulkEditModal");

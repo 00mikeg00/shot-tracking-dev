@@ -19,6 +19,7 @@
       <p class="mb-6 text-lg">This app helps you keep track of your assignments and film work like shots and assets.</p>
       You can:</p>
       <ul class="list-disc list-inside text-lg space-y-2">
+        <li>Open your maya files</li>
         <li>See what's due and who is working on what</li>
         <li>Create and view videos of markups for revisions</li>
         <li>Check and approve your grades</li>
@@ -45,6 +46,8 @@
     <div class="bg-gray-800 p-6 rounded-xl mb-8">
       <p class="text-lg mb-4">A STUDENT can:</p>
       <ul class="list-disc list-inside text-lg space-y-2">
+        <li><a href="{{ url_for('help.help_classes') }}#assignment-open"
+            class="font-semibold text-blue-400 hover:text-yellow-500">Open Maya assignments</a></li>
         <li><a href="{{ url_for('help.help_classes') }}#class-submit"
             class="font-semibold text-blue-400 hover:text-yellow-500">Submit assignments through animation software</a></li>
         <li><a href="{{ url_for('help.help_films') }}#film-submit"
@@ -72,6 +75,8 @@
             href="{{ url_for('help.help_classes') }}#add-assignment">Add</a><a
             href="{{ url_for('help.help_classes') }}#edit-assignment">/Edit</a><a
             href="{{ url_for('help.help_classes') }}#delete-assignment">/Delete</a> an Assignment</li>
+        <li class="font-semibold text-blue-400 hover:text-yellow-500"><a
+            href="{{ url_for('help.help_classes') }}#copy-assignments">Copy Assignments from a different class</a></li>
         <li class="font-semibold text-blue-400 hover:text-yellow-500"><a 
             href="{{ url_for('help.help_grading') }}#instructors-status">Update and Change Grades</a></li>
         <li class="font-semibold text-blue-400 hover:text-yellow-500"><a
@@ -302,10 +307,27 @@
       <h3 class="text-xl font-semibold text-green-400 mt-8 mb-2" id="dashboard-semester">Semester</h3>
     <p class="mb-6 text-lg leading-relaxed">
       Dropdown to see what assignments and shots are due for the semester.</p>
-      <h3 class="text-xl font-semibold text-green-400 mt-8 mb-2" id="dashboard-status">Change Status</h3>
+      <h3 class="text-xl font-semibold text-green-400 mt-8 mb-2" id="dashboard-open">Open</h3>
+    <p class="mb-6 text-lg leading-relaxed">
+      Students can open the Maya file for the assignment.</p>
+      <h3 class="text-xl font-semibold text-green-400 mt-8 mb-2" id="dashboard-steps">Steps</h3>
+        <img src="{{ url_for('static', filename='help/images/dashboard-complex-assignment.png') }}" alt="Dashboard-complex"
+        class="rounded-xl shadow-lg mb-4">
     <p class="mb-6 text-lg leading-relaxed">
       Students can change the status of their shots here. They should only change it to In Progress, Help Needed, or Graded.
     Maya and ToonBoom handle changing the status to Submitted.</p>
+      <h3 class="text-xl font-semibold text-green-400 mt-8 mb-2" id="dashboard-planning">Submit Planning</h3>
+      <img src="{{ url_for('static', filename='help/images/dashboard-submit-planning.png') }}" alt="Dashboard-planning"
+        class="rounded-xl shadow-lg mb-4">
+      <p class="mb-6 text-lg leading-relaxed">
+        Students can change the upload images and videos for planning. They can also use the x-sheet tool.</p>
+      <h3 class="text-xl font-semibold text-green-400 mt-8 mb-2" id="dashboard-xsheet">X-Sheet</h3>
+      <img src="{{ url_for('static', filename='help/images/x-sheet.png') }}" alt="Dashboard-xsheet"
+        class="rounded-xl shadow-lg mb-4">
+
+    <p class="mb-4 text-lg">
+      The student can create an <a href="{{ url_for('help.help_classes') }}#x-sheet"
+        class="font-bold text-blue-400 hover:text-yellow-400">X-Sheet</a>
       <h3 class="text-xl font-semibold text-green-400 mt-8 mb-2" id="dashboard-review">Review</h3>
     <p class="mb-6 text-lg leading-relaxed">
       If there is a review done on the assignment, there will be a button here. This will link to a video, showing the changes

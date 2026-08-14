@@ -1,0 +1,167 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="flex justify-between items-center mx-auto mb-4">
+  <select id="film-dropdown" class="p-3 rounded text-black">
+    <option value="" disabled>Select a Film</option>
+    {% for f in all_films %}
+    <option value="{{ f.id }}" {% if f.id==film.id %}selected{% endif %}>
+      {{ f.name }}
+    </option>
+    {% endfor %}
+  </select>
+  <h2 class="text-2xl font-bold mb-6">Overview for "{{ film.name }}"</h2>
+  <div class="flex space-x-4">
+    <a href="{{ url_for('films.view_films') }}"
+      class="bg-red-800 text-white px-4 py-2 rounded-lg hover:bg-red-600">
+      Films
+    </a>
+    <a href="{{ url_for('films.film_overview', film_id=film.id) }}"
+      class="bg-red-800 text-white px-4 py-2 rounded-lg hover:bg-red-600 {% if active_page == 'overview' %}bg-yellow-800{% endif %}">
+      Overview
+    </a>
+    {% if film.prepro_done %}
+    <a href="{{ url_for('films.view_scenes', film_id=film.id) }}"
+      class="bg-red-800 text-white px-4 py-2 rounded-lg hover:bg-red-600">
+      Scenes
+    </a>
+    <a href="{{ url_for('films.view_assets', film_id=film.id) }}"
+      class="bg-red-800 text-white px-4 py-2 rounded-lg hover:bg-red-600">
+      Assets
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="bg-red-900 shadow-lg rounded-lg p-6">
+  <!-- Film Info -->
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6 text-sm">
+    <div>
+      <div class="text-gray-300 text-xs uppercase">Workflow</div>
+      <div class="text-white">{{ film.workflow_name or '—' }}</div>
+    </div>
+    <div>
+      <div class="text-gray-300 text-xs uppercase">Director</div>
+      <div class="text-white">{{ film.director_name or '—' }}</div>
+    </div>
+    <div>
+      <div class="text-gray-300 text-xs uppercase">UPM</div>
+      <div class="text-white">{{ film.upm_name or '—' }}</div>
+    </div>
+    <div>
+      <div class="text-gray-300 text-xs uppercase">Semester</div>
+      <div class="text-white">{{ film.semester or '—' }}</div>
+    </div>
+  </div>
+
+  <div class="flex justify-end mb-4">
+    <a href="{{ url_for('films.edit_film_route', film_id=film.id) }}"
+      class="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-2 rounded-lg text-sm">Edit Film</a>
+  </div>
+
+  <!-- Pre-Production -->
+  <h3 class="text-white font-bold text-lg mb-2">Pre-Production</h3>
+  {% if prepro_flows %}
+  <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-6">
+    {% for flow in prepro_flows %}
+    <div class="text-center bg-red-950 rounded-lg py-2">
+      <div class="text-white text-xs font-semibold mb-1">{{ flow.step_name }}</div>
+      <span class="inline-block px-2 py-1 rounded text-xs text-black"
+        style="background-color: {{ flow.nodes | selectattr('node_id','equalto',flow.selected_node_id) | map(attribute='color') | first or '#fff' }};">
+        {{ flow.selected_node_name or 'Not started' }}
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="text-gray-400 italic mb-6">No pre-production steps found for this film's workflow.</div>
+  {% endif %}
+  {% if not film.prepro_done %}
+  <div class="text-yellow-300 text-sm mb-6">
+    Pre-production isn't fully approved yet -- Scenes stay locked until it is.
+    Edit statuses on the <a href="{{ url_for('films.edit_film_route', film_id=film.id) }}" class="underline">Edit Film</a> page.
+  </div>
+  {% endif %}
+
+  <!-- Production -->
+  <h3 class="text-white font-bold text-lg mb-2">Production</h3>
+  {% if film.production_unlocked %}
+  <div id="progress-charts-{{ film.id }}" class="space-y-4"></div>
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      fetch(`/films/api/films/{{ film.id }}/progress_summary`)
+        .then(res => res.json())
+        .then(data => {
+          const container = document.getElementById("progress-charts-{{ film.id }}");
+
+          const renderCharts = (label, steps, href) => {
+            const section = document.createElement("div");
+            const heading = href
+              ? `<a href="${href}" class="text-white font-semibold mt-4 mb-2 inline-block hover:text-blue-400 hover:underline">${label}</a>`
+              : `<h4 class="text-white font-semibold mt-4 mb-2">${label}</h4>`;
+            section.innerHTML = heading;
+            const grid = document.createElement("div");
+            grid.className = "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4";
+
+            steps.forEach(step => {
+              const chartId = `${label.toLowerCase()}-step-{{ film.id }}-${step.step_id}`.replace(/\s+/g, '-');
+              const block = document.createElement("div");
+              block.className = "text-center";
+              block.innerHTML = `
+                <div class="text-xs text-white mb-1">${step.step_name}</div>
+                <canvas id="${chartId}" width="100" height="100"></canvas>`;
+              grid.appendChild(block);
+
+              setTimeout(() => {
+                new Chart(document.getElementById(chartId), {
+                  type: 'pie',
+                  data: {
+                    labels: step.status_summary.map(s => s.label),
+                    datasets: [{
+                      data: step.status_summary.map(s => s.value),
+                      backgroundColor: step.status_summary.map(s => s.color || '#999'),
+                      borderWidth: 1
+                    }]
+                  },
+                  options: { responsive: false, plugins: { legend: { display: false } } }
+                });
+              }, 0);
+            });
+
+            if (grid.children.length > 0) {
+              section.appendChild(grid);
+              container.appendChild(section);
+            }
+          };
+
+          const scenesUrl = "{{ url_for('films.view_scenes', film_id=film.id) }}";
+          const assetCategoryBaseUrl = "{{ url_for('films.view_asset_category', category='__CATEGORY__') }}";
+
+          if (data.scene_steps?.length > 0) renderCharts("Scenes", data.scene_steps, scenesUrl);
+          const filteredShots = (data.shot_steps || []).filter(s => {
+            const name = s.step_name.toLowerCase();
+            return !name.includes("thumbnail") && name !== "story and script";
+          });
+          // Shots have no film-wide page of their own -- Scenes is where
+          // you pick one and land on its shots, so "Shots" points there too.
+          if (filteredShots.length > 0) renderCharts("Shots", filteredShots, scenesUrl);
+          for (const [cat, steps] of Object.entries(data.asset_steps || {})) {
+            const categoryUrl = assetCategoryBaseUrl.replace("__CATEGORY__", encodeURIComponent(cat))
+              + `?film_id={{ film.id }}`;
+            renderCharts(`Assets: ${cat}`, steps, categoryUrl);
+          }
+        });
+    });
+  </script>
+  {% else %}
+  <div class="text-gray-400 italic">No production flows tracked yet.</div>
+  {% endif %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  document.getElementById("film-dropdown").addEventListener("change", function () {
+    if (this.value) window.location.href = `/films/${this.value}/overview`;
+  });
+</script>
+{% endblock %}

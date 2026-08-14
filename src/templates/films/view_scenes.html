@@ -16,7 +16,10 @@
       class="bg-red-800 text-white px-4 py-2 rounded-lg hover:bg-red-600 {% if active_page == 'films' %}bg-yellow-800{% endif %}">
       Films
     </a>
-
+    <a href="{{ url_for('films.film_overview', film_id=film.id) }}"
+      class="bg-red-800 text-white px-4 py-2 rounded-lg hover:bg-red-600 {% if active_page == 'overview' %}bg-yellow-800{% endif %}">
+      Overview
+    </a>
     <a href="{{ url_for('films.view_scenes', film_id=film.id) }}"
       class="bg-red-800 text-white px-4 py-2 rounded-lg hover:bg-red-600 {% if active_page == 'scenes' %}bg-yellow-800{% endif %}">
       Scenes
@@ -154,6 +157,25 @@
                 class="bg-yellow-600 hover:bg-yellow-500 text-white px-3 py-1 rounded text-sm">
                 Edit
               </a>
+              <a href="shottracker://open?action=scene_layout&scene_id={{ scene.id }}&login_name={{ session['login_name'] | urlencode }}"
+                class="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm">
+                Open LAYOUT SETUP in Maya
+              </a>
+              <a href="{{ url_for('films.edit_layout_config', film_id=film.id, scene_id=scene.id) }}"
+                class="bg-purple-700 hover:bg-purple-600 text-white px-3 py-1 rounded text-sm">
+                Edit Layout Config
+              </a>
+              {% if scene.layout_done %}
+              <span class="bg-gray-600 text-white px-3 py-1 rounded text-sm inline-block cursor-not-allowed">
+                LAYOUT SET Approved
+              </span>
+              {% else %}
+              <button type="button" data-scene-id="{{ scene.id }}" data-login-name="{{ session['login_name'] }}"
+                onclick="markSceneLayoutDone(this)"
+                class="bg-green-700 hover:bg-green-600 text-white px-3 py-1 rounded text-sm">
+                Mark Layout Done
+              </button>
+              {% endif %}
               <form id="delete-scene-form-{{ scene.id }}" method="POST"
                 action="{{ url_for('films.delete_scene_route', scene_id=scene.id) }}" style="display: none;"></form>
               <button type="button" onclick="confirmDeleteScene({{ scene.id }})"

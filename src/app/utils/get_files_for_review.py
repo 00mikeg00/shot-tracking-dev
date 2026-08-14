@@ -82,7 +82,15 @@ def get_individual_assignment_id(assignment_id, users_id):
     return result["id"] if result else None
 
 def get_class_id(class_name):
-    """ Get class_id from class_name (normalized match) """
+    """
+    Get class_id from class_name (normalized match). Excludes archived
+    classes -- without this, an archived duplicate with the same name as
+    an active class (e.g. two "Intermediate Animation" rows, one archived
+    and one not) can still win this match depending on row order, silently
+    resolving every submitted file in that class to the WRONG class_id/
+    assignment_id and breaking individual_assignments lookups for
+    students who are only enrolled in the active one.
+    """
 
     # Normalize filesystem name
     normalized = class_name.lower()
@@ -94,7 +102,7 @@ def get_class_id(class_name):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, class_name FROM classes
+        SELECT id, class_name FROM classes WHERE COALESCE(archived, 0) = 0
     """)
 
     for row in cursor.fetchall():

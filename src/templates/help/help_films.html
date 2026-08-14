@@ -26,8 +26,12 @@
     <h3 class="text-3xl font-semibold text-green-400 mt-10 mb-4" id="view-films">View Films</h3>
     <p class="mb-6 text-lg leading-relaxed">
       Clicking on the <strong>FILMS</strong> link at the top of the page takes you to the main films page, where you can
-      view all existing films, including their names, stage of production, main crew, shots and asset completion.
+      view all existing films, including their names, stage of production, main crew, shots and asset completion. Clicking on
+      the film itself will open that film's overview
     </p>
+    <p><img src="{{ url_for('static', filename='help/images/film-overview.png') }}" alt="Film-Overview"
+        class="w-[90%] h-auto align-middle" /></p>
+
 
     <h3 class="text-3xl font-semibold text-green-400 mt-10 mb-4" id="add-film">Adding a Film</h3>
     <p class="mb-6 text-lg leading-relaxed">Clicking the <strong>Add Film</strong> button will open this window:</p>
@@ -111,6 +115,7 @@
     <ol class="list-decimal list-inside mb-8 space-y-4 text-lg">
       <li><span>Films Dropdown - let's you quickly go from one film to another</span></li>
       <li><span>Films button - goes back to the main film page</span></li>
+      <li><span>Overview button - goes to that film's overview page</span></li>
       <li><span>Scenes button - goes to the scenes page for the selected film</span></li>
       <li><span>Assets button - goes to the assets page for the selected film</span></li>
     </ol>

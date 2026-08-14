@@ -83,6 +83,7 @@ def get_all_classes_minimal(conn):
         FROM classes c
         LEFT JOIN users u ON c.instructor_id = u.id
         LEFT JOIN semesters s ON c.semester_id = s.id
+        WHERE c.archived = 0
         ORDER BY s.year DESC,
                 CASE s.term
                     WHEN 'Spring' THEN 1
@@ -96,6 +97,17 @@ def get_all_classes_minimal(conn):
     except Exception as e:
         print(f"Error fetching class data: {e}")
         return []
+
+def serialize_classes_for_dropdown():
+    conn = get_db()
+    return [
+        {
+            "id": cls['id'],
+            "name": cls['full_class_name'],
+            "url": url_for('assignments.view_assignments', class_id=cls['id'])
+        }
+        for cls in get_all_classes_minimal(conn)
+    ]
 
 def get_class_by_id(class_id):
     query = "SELECT * FROM classes WHERE id = ?"
@@ -115,6 +127,7 @@ def get_all_classes_dict():
         FROM classes c
         JOIN semesters s ON c.semester_id = s.id
         LEFT JOIN users u ON c.instructor_id = u.id
+        WHERE c.archived = 0
         ORDER BY s.year DESC,
                  CASE s.term
                     WHEN 'Spring' THEN 1
@@ -145,15 +158,6 @@ def fetch_unique_class_names():
     rows = db.execute("SELECT DISTINCT class_name FROM classes ORDER BY class_name").fetchall()
     return [row["class_name"] for row in rows]
 
-def serialize_classes_for_dropdown():
-    return [
-        {
-            "id": cls['id'],
-            "name": cls['full_class_name'],
-            "url": url_for('assignments.view_assignments', class_id=cls['id'])
-        }
-        for cls in get_all_classes_minimal()
-    ]
 
 def get_class_folder_path(semester_label: str, class_name: str) -> str:
     return os.path.join(BASE_CLASS_FOLDER, semester_label, class_name)
@@ -363,7 +367,7 @@ def add_students_to_class_and_assignments(class_id, student_ids):
         with conn:
             # Get all assignments for this class
             assignments = conn.execute("""
-                SELECT id, name, start_date, completion_date, parent_step_id
+                SELECT id, name, start_date, completion_date, parent_step_id, frame_start, frame_end
                 FROM assignments WHERE class_id = ?
             """, (class_id,)).fetchall()
 
@@ -390,10 +394,11 @@ def add_students_to_class_and_assignments(class_id, student_ids):
                     # Insert individual assignment
                     conn.execute("""
                         INSERT INTO individual_assignments
-                        (assignment_id, users_id, name, start_date, completion_date)
-                        VALUES (?, ?, ?, ?, ?)
+                        (assignment_id, users_id, name, start_date, completion_date, frame_start, frame_end)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (assignment_id, student_id, assignment["name"],
-                          assignment["start_date"], assignment["completion_date"]))
+                          assignment["start_date"], assignment["completion_date"],
+                          assignment["frame_start"], assignment["frame_end"]))
 
                     individual_assignment_id = conn.execute(
                         "SELECT last_insert_rowid()"
@@ -444,9 +449,24 @@ def remove_students_from_class_db(class_id, student_ids):
                 )
             """.format(','.join('?' for _ in student_ids)), [*student_ids, class_id])
 
+            # Step 1.5: step_locks has no FK to individual_assignments any
+            # more (entity_id is polymorphic across assignment/shot_step/
+            # scene_step -- see migrate_polymorphic_step_locks.py), so it no
+            # longer cascades on its own and must be cleaned up manually
+            # here too, same as individual_assignment_statuses above.
+            conn.execute("""
+                DELETE FROM step_locks
+                WHERE entity_type = 'assignment' AND entity_id IN (
+                    SELECT id FROM individual_assignments
+                    WHERE users_id IN ({}) AND assignment_id IN (
+                        SELECT id FROM assignments WHERE class_id = ?
+                    )
+                )
+            """.format(','.join('?' for _ in student_ids)), [*student_ids, class_id])
+
             # ðŸ”¹ Step 2: Delete individual assignments
             conn.execute("""
-                DELETE FROM individual_assignments 
+                DELETE FROM individual_assignments
                 WHERE users_id IN ({}) AND assignment_id IN (
                     SELECT id FROM assignments WHERE class_id = ?
                 )
@@ -522,7 +542,7 @@ def copy_assignments_from_class(source_class_id, target_class_id):
     db = get_db()
 
     source_assignments = db.execute("""
-        SELECT a.name, a.parent_step_id, a.max_points,
+        SELECT a.name, a.parent_step_id, a.max_points, a.frame_start, a.frame_end,
                GROUP_CONCAT(aps.step_id) AS step_ids
         FROM assignments a
         JOIN assignment_progress_steps aps ON aps.assignment_id = a.id
@@ -543,6 +563,8 @@ def copy_assignments_from_class(source_class_id, target_class_id):
             "parent_step_id": a["parent_step_id"],
             "progress_step_ids": step_ids,
             "assign_option": "none",
-            "selected_students": []
+            "selected_students": [],
+            "frame_start": a["frame_start"],
+            "frame_end": a["frame_end"]
         })
 

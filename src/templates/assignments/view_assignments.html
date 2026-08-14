@@ -45,28 +45,32 @@
 <div class="table-container bg-red-900 p-4 rounded-lg w-full">
     <h2 class="text-3xl font-bold text-white mb-4 text-center">Assignments</h2>
     
-    <div class="overflow-y-auto max-h-[500px]">
+    <div class="overflow-y-auto overflow-x-auto max-h-[500px]">
         <table class="table bg-red-950 table-fixed w-full">
     
             <!-- Force column widths here -->
             <colgroup>
-                <col style="width: 300px;" />
-                <col style="width: 140px;" />
-                <col style="width: 140px;" />
+                <col style="width: 260px;" />
+                <col style="width: 120px;" />
+                <col style="width: 120px;" />
+                <col style="width: 100px;" />
+                <col style="width: 100px;" />
                 <col style="width: 500px;" />
                 <col style="width: 180px;" />
             </colgroup>
-    
+
             <thead class="bg-gray-800 text-white sticky top-0 z-10">
                 <tr>
                     <th class="p-3 text-left border-b">Assignment Name</th>
                     <th class="p-3 text-left border-b">Start Date</th>
                     <th class="p-3 text-left border-b">Due Date</th>
+                    <th class="p-3 text-left border-b">Frame Start</th>
+                    <th class="p-3 text-left border-b">Frame End</th>
                     <th class="p-3 text-center border-b">Progress</th>
                     <th class="p-3 text-left border-b">Actions</th>
                 </tr>
             </thead>
-    
+
             <tbody id="assignments-table" class="bg-red-950 text-white">
                 {% for assignment in assignments %}
                 <tr class="border-b hover:bg-red-950">
@@ -78,7 +82,9 @@
                     </td>
                     <td class="p-3 border-b">{{ assignment.start_date }}</td>
                     <td class="p-3 border-b">{{ assignment.completion_date }}</td>
-    
+                    <td class="p-3 border-b">{{ assignment.frame_start if assignment.frame_start is not none else '' }}</td>
+                    <td class="p-3 border-b">{{ assignment.frame_end if assignment.frame_end is not none else '' }}</td>
+
                     {% if True %}
 
                     <td class="p-3 border-b">
@@ -95,7 +101,9 @@
                             class="edit-assignment-btn bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1 rounded-lg"
                             data-id="{{ assignment.id }}" data-name="{{ assignment.name }}"
                             data-start-date="{{ assignment.start_date }}"
-                            data-completion-date="{{ assignment.completion_date }}">
+                            data-completion-date="{{ assignment.completion_date }}"
+                            data-frame-start="{{ assignment.frame_start if assignment.frame_start is not none else '' }}"
+                            data-frame-end="{{ assignment.frame_end if assignment.frame_end is not none else '' }}">
                             Edit
                         </button>
                         <button class="bg-red-200 hover:bg-red-600 text-white px-3 py-1 rounded-lg"
@@ -150,8 +158,21 @@
 
             <div class="mb-4">
                 <label for="edit-completion-date" class="block text-white font-semibold">Completion Date:</label>
-                <input type="date" class="w-full border rounded-lg p-2 text-gray-900 focus:ring focus:ring-blue-300" 
+                <input type="date" class="w-full border rounded-lg p-2 text-gray-900 focus:ring focus:ring-blue-300"
                     id="edit-completion-date" name="completion_date" required>
+            </div>
+
+            <div class="mb-4 grid grid-cols-2 gap-4">
+                <div>
+                    <label for="edit-frame-start" class="block text-white font-semibold">Frame Start:</label>
+                    <input type="number" class="w-full border rounded-lg p-2 text-gray-900 focus:ring focus:ring-blue-300"
+                        id="edit-frame-start" name="frame_start">
+                </div>
+                <div>
+                    <label for="edit-frame-end" class="block text-white font-semibold">Frame End:</label>
+                    <input type="number" class="w-full border rounded-lg p-2 text-gray-900 focus:ring focus:ring-blue-300"
+                        id="edit-frame-end" name="frame_end">
+                </div>
             </div>
 
             <div class="flex justify-between">

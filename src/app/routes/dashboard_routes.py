@@ -2,6 +2,7 @@
 import os
 import glob
 import mimetypes
+from datetime import datetime, timezone
 from flask import Blueprint, render_template, session, jsonify, request, send_file, send_from_directory
 from app.database.db import get_db
 from app.utils.auth_utils import login_required, get_current_semester_id
@@ -781,6 +782,7 @@ def get_approved_film_items():
         JOIN steps st ON st.id = sps.step_id
         JOIN film_crew fc ON fc.film_id = f.id
         WHERE fc.user_id = ?
+          AND f.archived = 0
           AND sps.status = 'Approved'
           AND st.name IN ('Thumbnails', 'FB Thumbnails')
         ORDER BY f.name, s.scene_number
@@ -834,6 +836,45 @@ def serve_approved_film_file():
 #--------------------------------------------------------------------------------------------------------------
 #    ASSETS
 #--------------------------------------------------------------------------------------------------------------
+def _resolve_active_asset_steps(conn, asset_ids):
+    """
+    {asset_id: active_step_id}, using the same "lowest order_num unlocked
+    among Modeling/Texture-Surface/Rigging, else the last one if all
+    locked" algorithm as Assets.py's resolve_current_step() -- computed
+    server-side here (not per-viewing-user's own assigned rows) because a
+    step's assignee can differ per step, so one user's own rows alone
+    don't carry enough context to know what's actually next for that asset.
+    """
+    if not asset_ids:
+        return {}
+
+    placeholders = ",".join("?" * len(asset_ids))
+    rows = conn.execute(f"""
+        SELECT
+            asa.asset_id, s.id AS step_id, s.order_num, sc.step_code AS short_code,
+            sl.locked
+        FROM asset_step_assignments asa
+        JOIN steps s ON s.id = asa.step_id
+        LEFT JOIN step_codes sc ON sc.step_name = s.name
+        LEFT JOIN step_locks sl
+            ON sl.entity_type = 'asset_step' AND sl.entity_id = asa.asset_id AND sl.step_id = s.id
+        WHERE asa.asset_id IN ({placeholders})
+          AND sc.step_code IN ('MOD', 'TEX', 'RIG', 'LGTRIG')
+    """, asset_ids).fetchall()
+
+    by_asset = {}
+    for row in rows:
+        by_asset.setdefault(row["asset_id"], []).append(row)
+
+    active = {}
+    for asset_id, steps in by_asset.items():
+        unlocked = [s for s in steps if not s["locked"]]
+        chosen = min(unlocked, key=lambda s: s["order_num"]) if unlocked else max(steps, key=lambda s: s["order_num"])
+        active[asset_id] = chosen["step_id"]
+
+    return active
+
+
 @dashboard_bp.route("/api/user_assets")
 def get_user_assets():
     user_id = session.get("view_as_user_id") or session.get("user_id")
@@ -873,6 +914,7 @@ def get_user_assets():
     JOIN nodes n ON asa.node_id = n.id
     JOIN films f ON a.film_id = f.id
     WHERE asa.assigned_user = ?
+      AND f.archived = 0
     ORDER BY asa.due_date IS NULL, asa.due_date
     """
 
@@ -880,13 +922,50 @@ def get_user_assets():
     rows = conn.execute(query, (user_id,)).fetchall()
     data = [dict(row) for row in rows]
 
+    # Fully Shot Ready assets are done -- nothing left for the student to
+    # do, and leaving them clickable here risks exactly the kind of
+    # after-the-fact reopen that's supposed to go through the coordinator's
+    # override picker instead (see individual_assets_view.html), not the
+    # student's own dashboard.
+    shot_ready_ids = {
+        row["asset_id"] for row in conn.execute("""
+            SELECT asa.asset_id
+            FROM asset_step_assignments asa
+            JOIN steps s ON s.id = asa.step_id
+            WHERE s.name = 'Shot Ready' AND asa.status = 'Shot Ready'
+        """).fetchall()
+    }
+    data = [item for item in data if item["asset_id"] not in shot_ready_ids]
+
+    # A Done Proxy is done -- only that row drops off (unlike Shot Ready,
+    # which removes the whole asset), since Modeling/Texture-Surface/
+    # Rigging for the same asset are a separate, still-relevant track.
+    # Reopening a finished Proxy goes through the coordinator's override
+    # picker (individual_assets_view.html), not the student's dashboard.
+    data = [item for item in data if not (item["step_name"] == "Proxy" and item["status"] == "Done")]
+
     for item in data:
         try:
             item["step_nodes"] = json.loads(item["step_nodes"]) if item["step_nodes"] else []
         except Exception:
             item["step_nodes"] = []
 
+    active_steps = _resolve_active_asset_steps(conn, list({item["asset_id"] for item in data}))
+    for item in data:
+        item["is_active_step"] = active_steps.get(item["asset_id"]) == item["step_id"]
+
     return jsonify(data)
+
+# FB step -> the production step it gates. Only these two: FB Rigging's
+# Approved is the coordinator's separate "make it Shot Ready" action
+# (already handled elsewhere, per explicit confirmation), not a
+# step_locks unlock -- Rigging is the last file-versioned step, there's
+# nothing after it in FILE_VERSIONED_STEP_CODES to unlock.
+ASSET_FB_UNLOCKS_STEP = {
+    "FB Modeling": "Modeling",
+    "FB Texture/Surface": "Texture/Surface",
+}
+
 
 @dashboard_bp.route("/api/update_asset_status", methods=["POST"])
 def update_asset_status():
@@ -918,6 +997,35 @@ def update_asset_status():
     """
 
     conn.execute(query, (node_id, node_name, asset_id, step_id))
+
+    # FB Modeling/FB Texture-Surface reaching Approved is what unlocks the
+    # NEXT production step (Modeling -> Texture-Surface, Texture-Surface ->
+    # Rigging). Writes into the same step_locks table (entity_type=
+    # 'asset_step') that Assets.py's resolve_current_step() reads, so this
+    # is the actual mechanism that makes the dashboard's OPEN button (and
+    # is_active_step gating) advance -- not a separate flag.
+    if node_name == "Approved":
+        fb_step_row = conn.execute("SELECT name FROM steps WHERE id = ?", (step_id,)).fetchone()
+        production_step_name = ASSET_FB_UNLOCKS_STEP.get(fb_step_row["name"]) if fb_step_row else None
+
+        if production_step_name:
+            production_step = conn.execute("""
+                SELECT s.id
+                FROM asset_step_assignments asa
+                JOIN steps s ON s.id = asa.step_id
+                WHERE asa.asset_id = ? AND s.name = ?
+            """, (asset_id, production_step_name)).fetchone()
+
+            if production_step:
+                now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                approver_id = session.get("user_id")
+                conn.execute("""
+                    INSERT INTO step_locks (entity_type, entity_id, step_id, locked, locked_by, locked_at)
+                    VALUES ('asset_step', ?, ?, 1, ?, ?)
+                    ON CONFLICT(entity_type, entity_id, step_id)
+                    DO UPDATE SET locked = 1, locked_by = excluded.locked_by, locked_at = excluded.locked_at
+                """, (asset_id, production_step["id"], approver_id, now))
+
     conn.commit()
 
     return jsonify({"success": True})

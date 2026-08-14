@@ -27,8 +27,23 @@
 
             <div>
                 <label for="completion-date" class="block text-white font-medium">Completion Date</label>
-                <input type="date" id="completion-date" name="completion_date" 
+                <input type="date" id="completion-date" name="completion_date"
                        class="w-full border rounded-lg p-2 text-gray-900 focus:ring focus:ring-blue-300" required>
+            </div>
+        </div>
+
+        <!-- ✅ Frame Range -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+                <label for="frame-start" class="block text-white font-medium">Frame Start</label>
+                <input type="number" id="frame-start" name="frame_start"
+                       class="w-full border rounded-lg p-2 text-gray-900 focus:ring focus:ring-blue-300">
+            </div>
+
+            <div>
+                <label for="frame-end" class="block text-white font-medium">Frame End</label>
+                <input type="number" id="frame-end" name="frame_end"
+                       class="w-full border rounded-lg p-2 text-gray-900 focus:ring focus:ring-blue-300">
             </div>
         </div>
 

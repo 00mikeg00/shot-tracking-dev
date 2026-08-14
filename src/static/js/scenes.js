@@ -170,3 +170,38 @@ function confirmDeleteScene(sceneId) {
     }
   });
 }
+
+function markSceneLayoutDone(button) {
+  const sceneId = button.dataset.sceneId;
+  const loginName = button.dataset.loginName;
+
+  Swal.fire({
+    title: 'Mark scene Layout done?',
+    text: "This unlocks per-shot Layout for every shot in this scene. No instructor approval is required for this step.",
+    icon: 'question',
+    showCancelButton: true,
+    confirmButtonColor: '#15803d',
+    cancelButtonColor: '#3085d6',
+    confirmButtonText: 'Yes, mark it done',
+    cancelButtonText: 'Cancel'
+  }).then((result) => {
+    if (!result.isConfirmed) return;
+
+    fetch('/classes/api/launcher/capstone/scene-layout/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scene_id: sceneId, login_name: loginName })
+    })
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok) {
+          Swal.fire('Error', data.error || 'Could not mark Layout done.', 'error');
+          return;
+        }
+        Swal.fire('Done', 'Scene Layout marked done.', 'success');
+      })
+      .catch(() => {
+        Swal.fire('Error', 'Could not reach Shot Tracker.', 'error');
+      });
+  });
+}

@@ -13,16 +13,69 @@
       This page will go over the buttons in the Maya shelf and what they do.
     </p>
 
-    <h5 class="text-xl text-green-500 mt-4 mb-2" id="assignments"><img src="{{ url_for('static', filename='help/images/assignment.png') }}" alt="Users"
-      class="inline w-6 h-6 mx-1 align-middle" />Assignments</h5>
-    <p class="mb-4">This is where the students should start their assignments. Maya will ask where to save the file and then ask the user to choose the assignment. Maya will add the rig needed for the course, a camera to rendering
-      and name the file correctly for the assignment and for the corresponding movies. 
-    </p>
-    <p class="mb-4"><a href="{{ url_for('help.help_classes') }}#maya-walk-through" class="font-semibold text-blue-400 hover:text-yellow-700">
-      Creating an Assignment walk-through</a>
-    </p>
-
     <div><hr class="my-4 pl-4 border-gray-600"></div>
+
+    <h5 class="text-xl text-green-500 mt-4 mb-2" id="metadata"><img
+        src="{{ url_for('static', filename='help/images/metadata.png') }}" alt="Metadata"
+        class="inline w-6 h-6 mx-1 align-middle" />MetaData</h5>
+    <p class="mb-4">This is to ONLY be used if your assignment is named incorrectly.
+    </p>
+    <p><img src="{{ url_for('static', filename='help/images/fix-assignment-window.png') }}" alt="FixAssignment"
+        class="w-[50%] h-auto align-middle" /></p>
+    <p class="mb-4">This window will open up.
+    </p>
+    <ul class="list-disc list-inside mb-6">
+      <li>The software knows what class you are in.</li>
+      <li>Select the correct assignment from the dropdown.</li>
+      <li>This will copy your assignment with the correct name and save it to the server.</li>
+    </ul>
+    
+    <div>
+      <hr class="my-4 pl-4 border-gray-600">
+    </div>
+
+    <h5 class="text-xl text-green-500 mt-4 mb-2" id="GAASave"><img
+        src="{{ url_for('static', filename='help/images/GAA_Save.png') }}" alt="GAASave"
+        class="inline w-6 h-6 mx-1 align-middle" />GAA Save</h5>
+    <p class="mb-4">This is to ONLY be used if your assignment has multiple steps.
+    </p>
+    <p><img src="{{ url_for('static', filename='help/images/GAA_Save-window.png') }}" alt="GAASave-window"
+        class="w-[50%] h-auto align-middle" /></p>
+    <p class="mb-4">This window will open up.
+    </p>
+    <ul class="list-disc list-inside mb-6">
+      <li>The software knows what step you are in.</li>
+      <li>If you want to lock the step and are ready to move on to the next step, click the checkbox and hit save.</li>
+      <li>This will copy your assignment with the correct step name and save it to the server.</li>
+      <li>It will also then open up the new step file. This will be almost instantaneous.</li>
+    </ul>
+    
+    <div>
+      <hr class="my-4 pl-4 border-gray-600">
+    </div>
+
+    <h5 class="text-xl text-green-500 mt-4 mb-2" id="GAAOpen"><img
+        src="{{ url_for('static', filename='help/images/GAA_Open.png') }}" alt="GAAOpen"
+        class="inline w-6 h-6 mx-1 align-middle" />GAA Open</h5>
+    <p class="mb-4">This is to ONLY be used if your assignment has multiple steps.
+    </p>
+    <p><img src="{{ url_for('static', filename='help/images/GAA_Open-window.png') }}" alt="GAAOpen-window"
+        class="w-[50%] h-auto align-middle" /></p>
+    <p class="mb-4">This window will open up.
+    </p>
+    <ul class="list-disc list-inside mb-6">
+      <li>The software knows what step you are in.</li>
+      <li>This will allow you to open any step of the assignment.</li>
+    </ul>
+
+    <p><img src="{{ url_for('static', filename='help/images/GAA_Open-options.png') }}" alt="GAAOpen-options"
+        class="w-[50%] h-auto align-middle" /></p>
+    <p class="mb-4">This dropdown will know if a step is locked or not. You can still open locked steps - BE CAREFUL!
+    </p>
+    
+    <div>
+      <hr class="my-4 pl-4 border-gray-600">
+    </div>
 
     <h5 class="text-xl text-green-500 mt-4 mb-2" id="rigs"><img src="{{ url_for('static', filename='help/images/rig.png') }}" alt="Rig"
       class="inline w-6 h-6 mx-1 align-middle" />Rigs</h5>

@@ -140,6 +140,8 @@ def add_assignment():
     progress_step_ids = request.form.getlist("progress_step_ids")
     assign_option = data.get('assign_option', 'all')
     selected_students = request.form.getlist("selected_students")
+    frame_start = data.get('frame_start') or None
+    frame_end = data.get('frame_end') or None
 
     if not all([class_id, name, start_date, completion_date, parent_step_id, progress_step_ids]):
         context = get_assignment_form_data(class_id)
@@ -155,7 +157,9 @@ def add_assignment():
             "parent_step_id": parent_step_id,
             "progress_step_ids": progress_step_ids,
             "assign_option": assign_option,
-            "selected_students": selected_students
+            "selected_students": selected_students,
+            "frame_start": frame_start,
+            "frame_end": frame_end
         })
         return redirect(url_for("assignments.view_assignments", class_id=class_id, success=True))
 
@@ -198,8 +202,8 @@ def api_view_assignments(class_id):
 
     db = get_db()
     query = """
-        SELECT id, name, start_date, completion_date, progress_step_id, parent_step_id 
-        FROM assignments 
+        SELECT id, name, start_date, completion_date, progress_step_id, parent_step_id, frame_start, frame_end
+        FROM assignments
         WHERE class_id = ?
     """
     assignments = [dict(row) for row in db.execute(query, (class_id,))]
@@ -632,7 +636,7 @@ def add_individual_assignment_route(assignment_id):
         # [OK] Fetch the assignment name
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM assignments WHERE id = ?", (assignment_id,))
+        cursor.execute("SELECT name, frame_start, frame_end FROM assignments WHERE id = ?", (assignment_id,))
         assignment_name_row = cursor.fetchone()
 
         if not assignment_name_row:
@@ -646,8 +650,10 @@ def add_individual_assignment_route(assignment_id):
             users_id=user_id,
             assignment_name=assignment_name,  # [OK] Ensure we include assignment name
             start_date=start_date,
-            completion_date=completion_date
+            completion_date=completion_date,
             # current_status="Not Started",  # [OK] Default status
+            frame_start=assignment_name_row["frame_start"],
+            frame_end=assignment_name_row["frame_end"]
         )
 
         return jsonify({"success": True, "message": "Student added successfully!"})
@@ -683,7 +689,7 @@ def add_student_to_assignment():
 
         # [OK] Fetch required fields from `assignments` table
         assignment = db.execute(
-            "SELECT name, start_date, completion_date FROM assignments WHERE id = ?", (assignment_id,)
+            "SELECT name, start_date, completion_date, frame_start, frame_end FROM assignments WHERE id = ?", (assignment_id,)
         ).fetchone()
 
         if not assignment:
@@ -703,8 +709,9 @@ def add_student_to_assignment():
             assignment_name=assignment_name,
             start_date=start_date,
             completion_date=completion_date,
-            current_status=current_status  # [OK] Fix applied here
-
+            current_status=current_status,  # [OK] Fix applied here
+            frame_start=assignment['frame_start'],
+            frame_end=assignment['frame_end']
         )
 
         # [OK] Fetch step IDs for the assignment's parent_step_id
@@ -735,6 +742,8 @@ def edit_assignment(assignment_id):
         name = data.get("name")
         start_date = data.get("start_date")
         completion_date = data.get("completion_date")
+        frame_start = data.get("frame_start") or None
+        frame_end = data.get("frame_end") or None
 
         # Validate fields
         if not all([name, start_date, completion_date]):
@@ -742,7 +751,7 @@ def edit_assignment(assignment_id):
             return jsonify({"success": False, "error": "Missing required fields"}), 400
 
         # Call function to update the database
-        update_assignment(assignment_id, name, start_date, completion_date)
+        update_assignment(assignment_id, name, start_date, completion_date, frame_start, frame_end)
 
         print(f"[OK] Assignment {assignment_id} updated successfully!")
         return jsonify({"success": True, "message": "Assignment updated successfully!"})
@@ -760,6 +769,78 @@ def delete_assignment(assignment_id):
         print(f"Error deleting assignment {assignment_id}: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+def update_assignment_status_and_crossflow(conn, individual_assignment_id, step_id, new_status):
+    """
+    Sets current_status for (individual_assignment_id, step_id) and propagates
+    any crossflow links to their target steps on the same individual
+    assignment. Shared by the authenticated dashboard route and the
+    unauthenticated launcher route (playblast tooling running from Maya,
+    no browser session available) so there's exactly one implementation of
+    this logic instead of two that can drift apart.
+
+    Returns (success: bool, payload: dict) — payload is either
+    {"updated_steps": [...]} or {"error": "..."}.
+    """
+    cursor = conn.cursor()
+
+    save_grade_history(conn, individual_assignment_id, step_id, new_status)
+
+    cursor.execute("""
+        INSERT OR REPLACE INTO individual_assignment_statuses (individual_assignment_id, step_id, current_status)
+        VALUES (?, ?, ?)
+    """, (individual_assignment_id, step_id, new_status))
+    conn.commit()
+
+    cursor.execute(
+        "SELECT id FROM nodes WHERE name = ? AND step_id = ?",
+        (new_status, step_id)
+    )
+    parent_node_row = cursor.fetchone()
+    if not parent_node_row:
+        logging.error(f"❌ Node ID not found for status '{new_status}' and step_id '{step_id}'")
+        return False, {"error": f"Node ID not found for status '{new_status}' and step_id '{step_id}'"}
+
+    parent_node_id = parent_node_row[0]
+
+    cursor.execute("""
+        SELECT to_flow_id, child_node_id
+        FROM links
+        WHERE parent_node_id = ? AND step_id = ?
+    """, (parent_node_id, step_id))
+    crossflow_links = cursor.fetchall()
+
+    updated_steps = []
+
+    for link in crossflow_links:
+        to_flow_id = link[0]
+        child_node_id = link[1]
+
+        cursor.execute(
+            "SELECT name FROM nodes WHERE id = ? AND step_id = ?",
+            (child_node_id, to_flow_id)
+        )
+        node_name_row = cursor.fetchone()
+        if not node_name_row:
+            logging.error(f"❌ Node name not found for child_node_id '{child_node_id}' and to_flow_id '{to_flow_id}'")
+            continue
+
+        child_node_name = node_name_row[0]
+        target_individual_id = individual_assignment_id
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO individual_assignment_statuses (individual_assignment_id, step_id, current_status)
+            VALUES (?, ?, ?)
+        """, (target_individual_id, to_flow_id, child_node_name))
+        updated_steps.append({
+            "target_individual_id": target_individual_id,
+            "step_id": to_flow_id,
+            "child_status": child_node_name
+        })
+
+    conn.commit()
+    return True, {"updated_steps": updated_steps}
+
+
 @assignments_bp.route('/api/update-status', methods=['POST'])
 @login_required
 def update_assignment_status():
@@ -767,91 +848,19 @@ def update_assignment_status():
     individual_assignment_id = data.get("individual_assignment_id")
     step_id = data.get("step_id")
     new_status = data.get("current_status")
-    
-    print("🔄 DEBUG: Incoming update", {
-        "individual_assignment_id": individual_assignment_id,
-        "step_id": step_id,
-        "new_status": new_status
-    })
-    
+
     if not individual_assignment_id or not step_id or not new_status:
         logging.error("❌ Error: Missing required parameters (individual_assignment_id, step_id, current_status)")
         return jsonify({"error": "Missing required parameters"}), 400
-    
+
     try:
-        # ✅ Save history before overwrite
         conn = get_db()
-        cursor = conn.cursor()
-        save_grade_history(conn, individual_assignment_id, step_id, new_status)
-
-        # 1. Update the current status for this step_id
-        cursor.execute("""
-            INSERT OR REPLACE INTO individual_assignment_statuses (individual_assignment_id, step_id, current_status)
-            VALUES (?, ?, ?)
-        """, (individual_assignment_id, step_id, new_status))
-        conn.commit()
-
-        # 2. Get the node ID for this new status
-        cursor.execute(
-            "SELECT id FROM nodes WHERE name = ? AND step_id = ?",
-            (new_status, step_id)
-        )
-        parent_node_row = cursor.fetchone()
-        if not parent_node_row:
-            logging.error(f"❌ Node ID not found for status '{new_status}' and step_id '{step_id}'")
-            return jsonify({"error": f"Node ID not found for status '{new_status}' and step_id '{step_id}'"}), 400
-
-        parent_node_id = parent_node_row[0]
-
-        # 3. Find any crossflow links for this exact parent node
-        cursor.execute("""
-            SELECT to_flow_id, child_node_id 
-            FROM links
-            WHERE parent_node_id = ? AND step_id = ?
-        """, (parent_node_id, step_id))
-        crossflow_links = cursor.fetchall()
-        print("🔗 DEBUG: Crossflow links found:", [dict(zip([c[0] for c in cursor.description], row)) for row in crossflow_links])
-
-        updated_steps = []
-
-        # 4. For each crossflow, update the correct target assignment for this student
-        for link in crossflow_links:
-            to_flow_id = link[0]   # target step_id (5 or 6)
-            child_node_id = link[1]
-
-            # Find the target node name
-            cursor.execute(
-                "SELECT name FROM nodes WHERE id = ? AND step_id = ?",
-                (child_node_id, to_flow_id)
-            )
-            node_name_row = cursor.fetchone()
-            if not node_name_row:
-                logging.error(f"❌ Node name not found for child_node_id '{child_node_id}' and to_flow_id '{to_flow_id}'")
-                continue
-
-
-            child_node_name = node_name_row[0]
-
-            # 🔁 Crossflow: update the *same* individual assignment (same row in the table)
-            target_individual_id = individual_assignment_id  # <- use current IA directly
-
-
-            # Update status for the correct target IA
-            cursor.execute("""
-                INSERT OR REPLACE INTO individual_assignment_statuses (individual_assignment_id, step_id, current_status)
-                VALUES (?, ?, ?)
-            """, (target_individual_id, to_flow_id, child_node_name))
-            updated_steps.append({
-                "target_individual_id": target_individual_id,
-                "step_id": to_flow_id,
-                "child_status": child_node_name
-            })
-            print(f"✅ DEBUG: Crossflow updated for user via IA {target_individual_id}, step {to_flow_id}, status {child_node_name}")
-
-        conn.commit()
+        success, payload = update_assignment_status_and_crossflow(conn, individual_assignment_id, step_id, new_status)
+        if not success:
+            return jsonify(payload), 400
 
         logging.info(f"[OK] Status updated successfully for IA {individual_assignment_id}, Step {step_id}")
-        return jsonify({"success": True, "message": "Status updated successfully", "updated_steps": updated_steps})
+        return jsonify({"success": True, "message": "Status updated successfully", **payload})
 
     except Exception as e:
         logging.error(f"❌ Error updating status: {e}")

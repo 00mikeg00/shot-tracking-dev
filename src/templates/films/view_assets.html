@@ -14,6 +14,8 @@
     <div class="flex space-x-4">
         <a href="{{ url_for('films.view_films') }}"
             class="bg-red-800 text-white px-4 py-2 rounded-lg hover:bg-red-600">Films</a>
+        <a href="{{ url_for('films.film_overview', film_id=film.id) }}"
+            class="bg-red-800 text-white px-4 py-2 rounded-lg hover:bg-red-600">Overview</a>
         <a href="{{ url_for('films.view_scenes', film_id=film.id) }}"
             class="bg-red-800 text-white px-4 py-2 rounded-lg hover:bg-red-600">Scenes</a>
         <a href="{{ url_for('films.view_assets', film_id=film.id) }}"

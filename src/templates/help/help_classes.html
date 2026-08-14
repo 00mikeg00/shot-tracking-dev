@@ -154,56 +154,17 @@
 <h3 class="text-3xl font-semibold text-green-400 mt-10 mb-6" id="maya-walk-through">Maya Pipeline</h3>
 
 <p class="mb-8 text-lg leading-relaxed">
-  Students working in Maya should use the GAA or DMC shelf tools to set up, save, and submit assignments using the
-  following steps.
+  No more opening maya on the desktop. Go to Shot Tracker and Open the assignment in the dashboard. Always.
 </p>
-
-<div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-900 p-4 rounded-lg text-sm mb-10">
-  <strong>📌 NOTE:</strong> Before starting an assignment, in order for this submission to work, students MUST use the
-  following steps.
-</div>
 
 <ol class="list-decimal list-inside text-lg space-y-12">
   <li>
-    Click the <strong>Assignments</strong> button in the GAA shelf 
-    <img src="{{ url_for('static', filename='help/images/assignment.png') }}" 
+    Click the <strong>Open</strong> button in the Dashboard
+    <img src="{{ url_for('static', filename='help/images/dashboard-assignment.png') }}" 
          alt="Assignment Button"
-         class="inline w-6 h-6 mx-1 align-middle" /> 
-    and save the Maya file in a folder you will remember.
-
-    <div class="bg-green-500 border-l-4 border-green-800 text-amber-800 p-4 rounded-lg text-sm mt-6">
-      <strong>📌 REMEMBER:</strong> It's best to create a folder in your Documents folder OR on Onedrive. THIS is where your file will be saved.
-      When opening an assignment, this is where it will be.
-    </div>
-
-    <img src="{{ url_for('static', filename='help/images/Save_Folder_Assignment.png') }}" 
-         alt="Save Folder"
-         class="shadow-lg mt-8 w-full md:w-2/3">
-
-    <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-900 p-4 rounded-lg text-sm mt-8">
-      <strong>NOTE:</strong> You don't have to type anything in the Directory: box. Once you go to your folder, you can
-      simply click SAVE.
-    </div>
+         class="inline w-50 h-50 mx-1 align-middle" /> 
   </li>
-
-  <li>
-    Select your Class and Assignment from the modal window that appears.
-    <img src="{{ url_for('static', filename='help/images/Create_Assignment.png') }}" 
-         alt="Create Assignment"
-         class="shadow-lg mt-6 w-[307px] h-[246px]">
-  </li>
-
-  <li>
-    Click <strong>Create Assignment File</strong>. This loads the rigged scene and auto-generates the correct file name.
-  </li>
-
-  <li>
-    A render camera is added to your scene.
-    <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-900 p-4 rounded-lg text-sm mt-6">
-      <strong>📌 REMEMBER:</strong> Do not delete this camera — it's used for rendering!
-    </div>
-  </li>
-
+  <li>After a minute, maya will open with your file.</li>
   <li>Use <strong>File → Save</strong> to save your scene.</li>
 
   <li>
@@ -246,6 +207,93 @@
      class="underline font-semibold text-blue-400 hover:text-yellow-500">update your status</a> after grading.
 </div>
 
+    <div class="my-8">
+      <hr class="border-gray-700">
+    </div>
+    
+    <h3 class="text-3xl font-semibold text-green-400 mt-10 mb-4" id="x-sheet">X-Sheet</h3>
+    <p class="mb-6 text-lg leading-relaxed">
+      The X-Sheet is a digital exposure sheet for planning out timing on a dialogue or action shot -- frame by frame
+      dialogue, sounds, blocking notes, and holds/accents, all in one place. It's part of Planning, alongside Drawings
+      and Video Reference.
+    </p>
+    <img src="{{ url_for('static', filename='help/images/x-sheet.png') }}" alt="X-Sheet Overview"
+      class="rounded-xl shadow-lg mb-4 w-full h-auto">
+
+    <h4 class="text-2xl font-semibold text-green-400 mt-8 mb-2" id="x-sheet-open">Opening the X-Sheet</h4>
+    <p class="mb-4 text-lg leading-relaxed">
+      From the <strong>Submit Planning</strong> modal on the Dashboard, click <strong>Open X-Sheet</strong>. It opens
+      in a new tab.
+    </p>
+    <img src="{{ url_for('static', filename='help/images/xsheet-open-button.png') }}" alt="Open X-Sheet button"
+      class="rounded-xl shadow-lg mb-4 w-[60%] h-auto">
+    <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-900 p-4 rounded-lg text-sm">
+      <strong>📌 NOTE:</strong> The sheet is created automatically the first time you open it -- there's no separate
+      "create" step.
+    </div>
+
+    <h4 class="text-2xl font-semibold text-green-400 mt-8 mb-2" id="x-sheet-columns">Columns</h4>
+    <p class="mb-4 text-lg leading-relaxed">Every X-Sheet starts with 6 columns:</p>
+    <ol class="list-decimal list-inside mb-4 space-y-3 text-lg">
+      <li><span class="text-yellow-400 font-semibold">Frame</span> -- the frame number. Locked, can't be edited.</li>
+      <li><span class="text-yellow-400 font-semibold">Words</span> -- if the shot has dialogue, type the words here,
+        one word per frame where it lands.</li>
+      <li>
+        <span class="text-yellow-400 font-semibold">Sounds</span> -- the phoneme (mouth shape) for that frame, picked
+        from a dropdown. The same dropdown also has Hold, Accent, Up, and Down symbols -- picking one of those instead
+        of a letter marks a held pose or an accent on that frame.
+        <img src="{{ url_for('static', filename='help/images/xsheet-sounds-column.png') }}" alt="Sounds column dropdown"
+          class="rounded-xl shadow-lg mt-2 mb-2 w-[40%] h-auto">
+      </li>
+      <li><span class="text-yellow-400 font-semibold">Blocking</span> -- what the pose is at that frame. Keep it
+        short (e.g. "sit down", "reach").</li>
+      <li>
+        <span class="text-yellow-400 font-semibold">Breakdown/Tween</span> -- mark a frame as a breakdown (BRK, shows
+        green) or a tween (TW, shows yellow) from the dropdown.
+        <img src="{{ url_for('static', filename='help/images/xsheet-breakdown-tween.png') }}" alt="Breakdown and Tween marks"
+          class="rounded-xl shadow-lg mt-2 mb-2 w-[40%] h-auto">
+      </li>
+      <li><span class="text-yellow-400 font-semibold">Notes</span> -- anything else worth noting for that frame.
+        Keeping notes here instead of in Blocking keeps that column easier to scan.</li>
+    </ol>
+
+    <h4 class="text-2xl font-semibold text-green-400 mt-8 mb-2" id="x-sheet-custom-columns">Adding More Columns</h4>
+    <p class="mb-4 text-lg leading-relaxed">
+      Need to track Blinks, Hands, Tail, Legs, or Camera too? Use the category dropdown and name field above the sheet
+      to add a column for it. You can add as many as you like, up to 10 columns total (including the 6 default ones).
+    </p>
+    <img src="{{ url_for('static', filename='help/images/xsheet-add-column.png') }}" alt="Add Column controls"
+      class="rounded-xl shadow-lg mb-4 w-[60%] h-auto">
+    <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-900 p-4 rounded-lg text-sm">
+      <strong>📌 NOTE:</strong> Custom columns can be renamed or removed with the ✎/✕ icons in their header. Frame,
+      Words, Sounds, and Blocking are locked and can't be renamed or removed.
+    </div>
+
+    <h4 class="text-2xl font-semibold text-green-400 mt-8 mb-2" id="x-sheet-frames">Adding More Frames</h4>
+    <p class="mb-4 text-lg leading-relaxed">
+      The sheet's length is normally set from the shot's frame range. If you need more room, use
+      <strong>+ Add Frames at End</strong> to extend it.
+    </p>
+    <img src="{{ url_for('static', filename='help/images/xsheet-add-frames.png') }}" alt="Add Frames control"
+      class="rounded-xl shadow-lg mb-4 w-[60%] h-auto">
+
+    <h4 class="text-2xl font-semibold text-green-400 mt-8 mb-2" id="x-sheet-save-share">Save and Share for Feedback</h4>
+    <img src="{{ url_for('static', filename='help/images/xsheet-save-share.png') }}" alt="Save and Share for Feedback buttons"
+      class="rounded-xl shadow-lg mb-4 w-[60%] h-auto">
+    <ol class="list-decimal list-inside mb-4 space-y-3 text-lg">
+      <li><span class="text-yellow-400 font-semibold">Save</span> -- saves your work. Nothing autosaves, so save
+        often.</li>
+      <li><span class="text-yellow-400 font-semibold">Share for Feedback</span> -- sends the current sheet to the
+        Markup tool so your instructor can review and draw notes on it, the same way they do with your other Planning
+        images. Long sheets get split into multiple pages of 24 frames each.</li>
+    </ol>
+    <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-900 p-4 rounded-lg text-sm">
+      <strong>📌 NOTE:</strong> Share for Feedback is optional -- Submit Planning only requires that the X-Sheet has
+      been saved with something on it, not that you've shared it. Share it if you want feedback before you submit.
+    </div>
+    <img src="{{ url_for('static', filename='help/images/xsheet-markup-view.png') }}" alt="X-Sheet shared in the Markup tool"
+      class="rounded-xl shadow-lg mb-4 w-full h-auto">
+    <p class="text-sm text-gray-400 italic">A shared X-Sheet page, as it appears in the Markup tool.</p>
 
     <div class="my-8">
       <hr class="border-gray-700">

@@ -364,6 +364,128 @@ def get_review_files():
                     "individual_assignment_id": assignment_id
                 })
 
+    # 🖊️ Planning drawings — DB-backed (not filename-scanned), merged into
+    # the same all_assignments shape the Sidebar already renders. Unlike
+    # the video scan above there can be several current files per
+    # individual_assignment_id, so page_order (not a filename regex) is
+    # what keeps them in the right sequence.
+    planning_rows = cursor.execute("""
+        SELECT pf.id, pf.file_path, pf.file_name, pf.page_order,
+               pf.individual_assignment_id,
+               a.id AS assignment_id, a.name AS assignment_name,
+               owner.name AS student_name,
+               c.id AS class_id, c.class_name,
+               s.year, s.term
+        FROM planning_files pf
+        JOIN individual_assignments ia ON pf.individual_assignment_id = ia.id
+        JOIN assignments a ON ia.assignment_id = a.id
+        JOIN users owner ON ia.users_id = owner.id
+        JOIN classes c ON a.class_id = c.id
+        JOIN semesters s ON c.semester_id = s.id
+        ORDER BY pf.individual_assignment_id, pf.page_order
+    """).fetchall()
+
+    # 🎥 Video references — also DB-backed, same merge point as planning
+    # drawings. Unlike drawings these are reference material the instructor
+    # views (not annotated/reviewed per-file) -- there's no per-file _R
+    # lifecycle for these, so queue membership below is keyed off the
+    # Planning step's own status instead.
+    video_ref_rows = cursor.execute("""
+        SELECT vr.id, vr.file_path, vr.file_name, vr.source_type, vr.external_url,
+               vr.individual_assignment_id,
+               a.id AS assignment_id, a.name AS assignment_name,
+               owner.name AS student_name,
+               c.id AS class_id, c.class_name, s.year, s.term
+        FROM video_reference_files vr
+        JOIN individual_assignments ia ON vr.individual_assignment_id = ia.id
+        JOIN assignments a ON ia.assignment_id = a.id
+        JOIN users owner ON ia.users_id = owner.id
+        JOIN classes c ON a.class_id = c.id
+        JOIN semesters s ON c.semester_id = s.id
+        ORDER BY vr.individual_assignment_id, vr.uploaded_at
+    """).fetchall()
+
+    # One shared "does this still need a look" signal for both drawings and
+    # video references: show in the to-review queue while Planning is at
+    # Submitted, drop out once it's Graded/Retake (an instructor decision),
+    # and don't show at all before Submitted (In Progress/Needs Help are
+    # still the student's work-in-progress, not something to review yet).
+    planning_ia_ids = sorted({row["individual_assignment_id"] for row in planning_rows} |
+                              {row["individual_assignment_id"] for row in video_ref_rows})
+    planning_status_by_ia = {}
+    if planning_ia_ids:
+        placeholders = ",".join("?" * len(planning_ia_ids))
+        status_rows = cursor.execute(f"""
+            SELECT ias.individual_assignment_id, ias.current_status
+            FROM individual_assignment_statuses ias
+            JOIN steps s ON ias.step_id = s.id
+            WHERE s.name = 'Planning' AND ias.individual_assignment_id IN ({placeholders})
+        """, planning_ia_ids).fetchall()
+        planning_status_by_ia = {r["individual_assignment_id"]: r["current_status"] for r in status_rows}
+
+    def _planning_needs_review(ia_id):
+        return (planning_status_by_ia.get(ia_id) or "").strip().lower() == "submitted"
+
+    for row in planning_rows:
+        key = f"{row['year']}-{row['term']} - {row['class_name']}"
+        all_assignments.setdefault(key, [])
+        all_assignments[key].append({
+            "file_name": row["file_name"],
+            "file_path": row["file_path"],
+            "scene_id": None,
+            "individual_assignment_id": row["individual_assignment_id"],
+            "assignment_name": row["assignment_name"],
+            "student_name": row["student_name"],
+            "is_planning_drawing": True,
+            "page_order": row["page_order"],
+        })
+
+        if _planning_needs_review(row["individual_assignment_id"]):
+            assignments.append({
+                "class_id": row["class_id"],
+                "class_name": row["class_name"],
+                "assignment_id": row["assignment_id"],
+                "assignment_name": row["assignment_name"],
+                "student_name": row["student_name"],
+                "individual_assignment_id": row["individual_assignment_id"],
+                "file_name": row["file_name"],
+                "file_path": row["file_path"],
+                "is_planning_drawing": True,
+                "page_order": row["page_order"],
+            })
+
+    for row in video_ref_rows:
+        key = f"{row['year']}-{row['term']} - {row['class_name']}"
+        all_assignments.setdefault(key, [])
+        if row["source_type"] == "upload":
+            display_name = row["file_name"]
+        else:
+            # SideBar groups files by parsing "{assignment}_..." out of
+            # file_name -- a raw URL won't parse that way, so link entries
+            # get a synthetic name that follows the same convention.
+            # external_url (below) is what's actually opened on click.
+            display_name = f"{row['assignment_name']}_{row['student_name']}_PL_VideoRef_Link.url"
+        entry = {
+            "file_name": display_name,
+            "file_path": row["file_path"],
+            "scene_id": None,
+            "individual_assignment_id": row["individual_assignment_id"],
+            "assignment_name": row["assignment_name"],
+            "student_name": row["student_name"],
+            "is_video_reference": True,
+            "source_type": row["source_type"],
+            "external_url": row["external_url"],
+        }
+        all_assignments[key].append(entry)
+
+        if _planning_needs_review(row["individual_assignment_id"]):
+            assignments.append({
+                **entry,
+                "class_id": row["class_id"],
+                "class_name": row["class_name"],
+                "assignment_id": row["assignment_id"],
+            })
+
     reviewed = films_raw.get("reviewed", {})
     to_review = films_raw.get("to_review", {})
 
@@ -475,32 +597,69 @@ def get_assignment_status():
 
 @review_routes.route("/get_grade_options", methods=["GET"])
 def get_grade_options():
-    """ [OK] Fetch grade options by step_id """
+    """
+    Fetch grade options either by a single step_id (returns a flat array
+    of {name, color} -- used by the film/scene review panel, which
+    already knows each status's step_id), or by assignment_id (an
+    individual_assignments.id -- used by the Assignment review panel,
+    markup/page.jsx's fetch(`.../get_grade_options?assignment_id=...`),
+    which only has the assignment, not a step_id up front). The
+    assignment_id branch returns every Grade-* step under that
+    assignment's workflow as [{step_id, options: [...]}, ...], since an
+    assignment can have more than one (e.g. Grade-Blocking, Grade-Polish)
+    -- that shape is exactly what page.jsx's
+    `data.forEach(step => optionsByStep[step.step_id] = step.options)`
+    expects. Previously this endpoint only ever read step_id, so the
+    assignment_id call always 400'd and every assignment's grade dropdown
+    stayed empty/disabled.
+    """
     step_id = request.args.get("step_id")
-
-    if not step_id:
-        return jsonify({"error": "Missing step_id"}), 400
+    individual_assignment_id = request.args.get("assignment_id")
 
     conn = get_db()
     cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT name, color,
-            CAST(SUBSTR(position, INSTR(position, ' ') + 1) AS INTEGER) AS y_value
-        FROM nodes 
-        WHERE step_id = ?
-        ORDER BY y_value ASC
-    """, (step_id,))
+    def fetch_options(sid):
+        cursor.execute("""
+            SELECT name, color,
+                CAST(SUBSTR(position, INSTR(position, ' ') + 1) AS INTEGER) AS y_value
+            FROM nodes
+            WHERE step_id = ?
+            ORDER BY y_value ASC
+        """, (sid,))
+        return [{"name": r["name"], "color": r["color"]} for r in cursor.fetchall()]
 
-    rows = cursor.fetchall()
+    if individual_assignment_id:
+        row = cursor.execute("""
+            SELECT a.parent_step_id
+            FROM individual_assignments ia
+            JOIN assignments a ON a.id = ia.assignment_id
+            WHERE ia.id = ?
+        """, (individual_assignment_id,)).fetchone()
+
+        if not row or not row["parent_step_id"]:
+            conn.close()
+            return jsonify([])
+
+        grade_steps = cursor.execute("""
+            SELECT id FROM steps WHERE parent_id = ? AND name LIKE 'Grade%'
+        """, (row["parent_step_id"],)).fetchall()
+
+        result = [{"step_id": s["id"], "options": fetch_options(s["id"])} for s in grade_steps]
+        conn.close()
+        return jsonify(result)
+
+    if not step_id:
+        conn.close()
+        return jsonify({"error": "Missing step_id or assignment_id"}), 400
+
+    options = fetch_options(step_id)
     conn.close()
 
-    if not rows:
+    if not options:
         return jsonify({"error": "No grades available"}), 404
 
-    return jsonify([
-        {"name": r["name"], "color": r["color"]} for r in rows
-    ])
+    return jsonify(options)
 
 @review_routes.route("/api/graded_assignments_with_files", methods=["GET"])
 @login_required
@@ -761,12 +920,16 @@ def get_scene_status():
             step_name_guess = "Thumbnails"  # default fallback
             if step_match:
                 code = step_match.group(1).upper()
+                # Layout -> Blocking -> Animation -> Lighting are each their
+                # own top-level department code now (BL is no longer a
+                # sub-step suffix on ANIM -- see GAAPlayblastTool_V7.py).
                 step_map = {
                     "THUMB": "Thumbnails",
                     "SB": "Storyboards",
                     "LAY": "Layout",
+                    "BL": "Blocking",
                     "ANIM": "Animation",
-                    "LIGHT": "Lighting"
+                    "LGT": "Lighting"
                 }
                 step_name_guess = step_map.get(code, "Thumbnails")
 
@@ -850,9 +1013,42 @@ def get_scene_status():
         parent_step_id = row["step_id"]
 
         step_name_full = f"FB {step_name_guess}"
-        uses_shots_table = step_name_guess in ["Storyboards","Layout", "Animation", "Lighting"]
+        # Layout, Blocking, Animation, and Lighting are each per-shot steps
+        # tracked in shot_step_assignments -- must be included here or the
+        # query below silently falls through to scene_progress_steps
+        # instead, finding nothing for a shot-level step.
+        uses_shots_table = step_name_guess in [
+            "Storyboards", "Layout", "Blocking", "Animation", "Lighting"
+        ]
 
-        if uses_shots_table:
+        # Per-shot files (Film_Scene_Shot_STEP_User_v#) carry a SECOND
+        # 3-digit group after the scene number -- scene-level files
+        # (THUMB/SB) only ever have one, so this simply won't match for
+        # those and the query below falls back to scene-wide, same as
+        # before. Without this, a scene with more than one shot returns
+        # whichever shot's row LIMIT 1 happens to grab first (lowest
+        # shot_id), not the shot the file actually belongs to -- e.g. a
+        # scene where shot 010 is already "Approved" made every OTHER
+        # shot in that scene show "Approved" too.
+        shot_number = None
+        if file_name:
+            shot_num_match = re.search(r"_\d{3}_(\d{3})_", file_name)
+            shot_number = shot_num_match.group(1) if shot_num_match else None
+            print(f"🧠 DEBUG: Parsed shot_number = {shot_number}")
+
+        if uses_shots_table and shot_number:
+            cursor.execute("""
+                SELECT ssa.step_id, ssa.status, st.name
+                FROM shot_step_assignments ssa
+                JOIN shots sh ON ssa.shot_id = sh.id
+                JOIN steps st ON ssa.step_id = st.id
+                WHERE sh.scene_id = ?
+                AND CAST(sh.shot_number AS INTEGER) = CAST(? AS INTEGER)
+                AND st.name = ?
+                AND st.parent_id = ?
+                LIMIT 1
+            """, (scene_id, shot_number, step_name_full, parent_step_id))
+        elif uses_shots_table:
             cursor.execute("""
                 SELECT ssa.step_id, ssa.status, st.name
                 FROM shot_step_assignments ssa
@@ -1017,7 +1213,7 @@ def get_feedback_status(scene_id, step_code):
             "THB": "Thumbnails",
             "LAY": "Layout",
             "ANIM": "Animation",
-            "LIGHT": "Lighting"
+            "LGT": "Lighting"
         }
 
         base_step_name = step_map.get(step_code)
@@ -1307,8 +1503,33 @@ def upload_film_shot():
     shot_id = shot_row["shot_id"]
 
     # 🔹 Step 2: Determine paired production step (non-FB)
-    # If step_id is FB Layout (249), paired step is Layout (248)
-    update_step_id = step_id - 1  # this pattern holds across your pipeline
+    # Resolved by name (strip "FB " prefix, look up the sibling step under
+    # the same parent) rather than assuming FB step_id == production
+    # step_id + 1 -- that held for Layout (248/249) and Animation
+    # (251/252) in this film's workflow, but NOT for Lighting (253/274),
+    # where it silently pointed at a step_id (273) that doesn't exist,
+    # so the UPDATE below matched zero rows and Lighting submissions never
+    # actually flipped to "Submitted".
+    fb_step_row = cur.execute(
+        "SELECT name, parent_id FROM steps WHERE id = ?", (step_id,)
+    ).fetchone()
+    if not fb_step_row:
+        conn.close()
+        return jsonify({"error": f"step_id {step_id} not found"}), 404
+
+    production_name = fb_step_row["name"]
+    if production_name.startswith("FB "):
+        production_name = production_name[len("FB "):]
+
+    production_step_row = cur.execute(
+        "SELECT id FROM steps WHERE name = ? AND parent_id = ?",
+        (production_name, fb_step_row["parent_id"])
+    ).fetchone()
+    if not production_step_row:
+        conn.close()
+        return jsonify({"error": f"No paired production step found for '{fb_step_row['name']}'"}), 404
+
+    update_step_id = production_step_row["id"]  # this pattern holds across your pipeline
 
     # 🔹 Step 3: Save playblast
     save_path = f"//GAAAP1PRD01W/Films/{film_name}/{scene_number}/{shot_number}/{file.filename}"
@@ -1582,12 +1803,6 @@ def save_annotations():
     data = request.get_json(force=True, silent=True)
     print(">>> BODY:", data)
 
-    # 🛑 Prevent overwriting DB statuses (like CUT) with an empty re-save
-    if data.get("is_film") and not data.get("annotations") and not data.get("notes"):
-        print("🛑 Skipping /save_annotations — no content, avoiding overwrite of CUT status")
-        return jsonify({"message": "No annotations — skipped to preserve CUT"}), 200
-
-
     if request.method == "OPTIONS":
         response = make_response()
         response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
@@ -1628,7 +1843,7 @@ def save_annotations():
             except Exception as e:
                 print(f"[WARN] Failed to resolve wildcard base: {e}")
 
-        # 🟢 Continue using corrected base for reviewed path
+        # 🟢 Reviewed path always gets the _R rename, regardless of annotations/notes
         if base.endswith("_R"):
             reviewed_path = os.path.join(dirname, f"{base}{ext}")
             reviewed_json_path = os.path.join(dirname, f"{base}.json")
@@ -1641,32 +1856,46 @@ def save_annotations():
                     os.rename(original_path, reviewed_path)
                     print(f"[OK] Renamed → {reviewed_path}")
             except Exception as e:
-                print(f"[WARN] Rename failed: {e} — proceeding to save JSON anyway")
+                print(f"[WARN] Rename failed: {e} — proceeding anyway")
 
-
-        # 🟢 Automatically skip if file already reviewed (_R)
-        if base.endswith("_R"):
-            reviewed_path = os.path.join(dirname, f"{base}{ext}")
-            reviewed_json_path = os.path.join(dirname, f"{base}.json")
-        else:
-            reviewed_path = os.path.join(dirname, f"{base}_R{ext}")
-            reviewed_json_path = os.path.join(dirname, f"{base}_R.json")
-
-            # ✅ Try renaming file for reviewed version
-            try:
-                if os.path.exists(original_path):
-                    os.rename(original_path, reviewed_path)
-                    print(f"[OK] Renamed → {reviewed_path}")
-            except Exception as e:
-                print(f"[WARN] Rename failed: {e} — proceeding to save JSON anyway")
-
-        # ✅ Always write JSON (even empty) beside reviewed file
+        # 🖊️ Planning drawings are DB-backed (planning_files.file_path), not
+        # filename-scanned like videos -- the rename above just orphaned that
+        # row unless we repoint it at the new _R path too. Only do this if
+        # the rename actually landed (it can silently fail on Windows with
+        # WinError 32 if something still has the file open) -- otherwise
+        # we'd point the DB row at a file that was never created, which is
+        # worse than leaving it alone (videos self-heal via re-scan; this
+        # table doesn't).
         try:
-            with open(reviewed_json_path, "w", encoding="utf-8") as f:
-                json.dump(annotations or {}, f, indent=2, ensure_ascii=False)
-            print(f"[OK] JSON saved → {reviewed_json_path}")
+            normalized_original = original_path.replace("\\", "/")
+            normalized_reviewed = reviewed_path.replace("\\", "/")
+            rename_actually_happened = (
+                normalized_original != normalized_reviewed
+                and os.path.exists(reviewed_path)
+                and not os.path.exists(original_path)
+            )
+            if rename_actually_happened:
+                db_conn = get_db()
+                db_conn.execute("""
+                    UPDATE planning_files
+                    SET file_path = ?, file_name = ?
+                    WHERE file_path = ?
+                """, (normalized_reviewed, os.path.basename(reviewed_path), normalized_original))
+                db_conn.commit()
         except Exception as e:
-            print(f"[ERROR] JSON write failed: {e}")
+            print(f"[WARN] planning_files path sync skipped: {e}")
+
+        # ✅ Only write JSON when there's actual content — matches assignment behavior
+        has_content = bool(annotations) or bool(data.get("notes"))
+        if has_content:
+            try:
+                with open(reviewed_json_path, "w", encoding="utf-8") as f:
+                    json.dump(annotations or {}, f, indent=2, ensure_ascii=False)
+                print(f"[OK] JSON saved → {reviewed_json_path}")
+            except Exception as e:
+                print(f"[ERROR] JSON write failed: {e}")
+        else:
+            print("[OK] No annotations/notes — skipping JSON write")
 
         # ⭐ Copy to Favorites folder if checkbox was selected
         favorite = data.get("favorite", False)
@@ -1812,15 +2041,25 @@ def update_scene_status():
         step_name_upper = (step_name or "").upper()
 
         # 🔹 Get forward and reverse crossflow links
+        # Links are per-status-node edges in the workflow markup diagram (e.g. a
+        # "CUT" node on FB Animation wired straight to FB Lighting's "CUT" node,
+        # to cascade cuts downstream). Without matching parent_node_id/child_node_id
+        # to the actual new_status, a link meant only for one status (e.g. CUT)
+        # gets applied on every status change of that step -- e.g. approving FB
+        # Animation was incorrectly also approving FB Lighting via a CUT-only link.
         forward_links = cur.execute("""
-            SELECT DISTINCT to_flow_id FROM links
-            WHERE step_id = ? AND to_flow_id IS NOT NULL
-        """, (step_id,)).fetchall()
+            SELECT DISTINCT l.to_flow_id FROM links l
+            JOIN nodes n ON n.id = l.parent_node_id
+            WHERE l.step_id = ? AND l.to_flow_id IS NOT NULL
+              AND LOWER(TRIM(n.name)) = LOWER(TRIM(?))
+        """, (step_id, new_status)).fetchall()
 
         reverse_links = cur.execute("""
-            SELECT DISTINCT step_id FROM links
-            WHERE to_flow_id = ?
-        """, (step_id,)).fetchall()
+            SELECT DISTINCT l.step_id FROM links l
+            JOIN nodes n ON n.id = l.child_node_id
+            WHERE l.to_flow_id = ?
+              AND LOWER(TRIM(n.name)) = LOWER(TRIM(?))
+        """, (step_id, new_status)).fetchall()
 
         # Flatten lists
         forward_ids = [r["to_flow_id"] for r in forward_links if r["to_flow_id"]]
@@ -2210,6 +2449,20 @@ def delete_file():
         json_path = os.path.splitext(file_path)[0] + ".json"
         if os.path.exists(json_path):
             os.remove(json_path)
+
+        # Planning drawings are DB-backed (planning_files.file_path) --
+        # deleting only the disk file here (this route's original behavior,
+        # built for filename-scanned videos with no DB row) would leave a
+        # dangling row pointing at a file that no longer exists.
+        try:
+            normalized_path = file_path.replace("\\", "/")
+            db_conn = get_db()
+            db_conn.execute("DELETE FROM planning_files WHERE file_path = ?", (normalized_path,))
+            db_conn.execute("DELETE FROM video_reference_files WHERE file_path = ?", (normalized_path,))
+            db_conn.commit()
+        except Exception as e:
+            print(f"[WARN] planning_files/video_reference_files cleanup skipped: {e}")
+
         response = jsonify({"success": True, "message": "File deleted."})
         return response
     except Exception as e:

@@ -47,6 +47,46 @@
             </button>
         </div>
     </form>
+
+<h2 class="text-xl font-bold text-white mt-10 mb-4">Archived Classes</h2>
+<form id="restore-form" method="POST" action="{{ url_for('admin.restore_classes') }}">
+    <div class="overflow-x-auto bg-white p-6 rounded-lg shadow-lg">
+        <table class="table">
+            <thead>
+                <tr class="bg-gray-200">
+                    <th class="border border-gray-300 p-3">
+                        <input type="checkbox" id="select-all-archived" onclick="toggleSelectAllArchived()">
+                    </th>
+                    <th class="border border-gray-300 p-3 text-left bg-gray-200 text-black">Class Name</th>
+                    <th class="border border-gray-300 p-3 text-left bg-gray-200 text-black">Year</th>
+                    <th class="border border-gray-300 p-3 text-left bg-gray-200 text-black">Semester</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for cls in archived_classes %}
+                <tr class="hover:bg-gray-100">
+                    <td class="border border-gray-300 p-3 text-center text-black">
+                        <input type="checkbox" name="class_ids" value="{{ cls.id }}">
+                    </td>
+                    <td class="border border-gray-300 p-3">{{ cls.class_name }}</td>
+                    <td class="border border-gray-300 p-3">{{ cls.year }}</td>
+                    <td class="border border-gray-300 p-3">{{ cls.semester }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="p-3 text-center text-gray-500">No archived classes.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="flex justify-end mt-4">
+        <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700">
+            Restore Selected
+        </button>
+    </div>
+</form>
+
 </div>
 
 <script>
@@ -55,6 +95,13 @@
         const selectAll = document.getElementById('select-all');
         const checkboxes = document.querySelectorAll('input[name="class_ids"]');
         checkboxes.forEach(cb => cb.checked = selectAll.checked);
+    }
+</script>
+
+<script>
+    function toggleSelectAllArchived() {
+        const selectAll = document.getElementById('select-all-archived');
+        document.querySelectorAll('input[name="class_ids"]').forEach(cb => cb.checked = selectAll.checked);
     }
 </script>
 {% endblock %}

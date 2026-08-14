@@ -71,8 +71,8 @@ def add_class_route():
             new_class_data = parse_class_form(request.form)
 
             conn.execute("""
-                INSERT INTO classes (semester_id, code, class_number, class_name, description, instructor_id)
-                VALUES (:semester_id, :code, :class_number, :class_name, :description, :instructor_id)
+                INSERT INTO classes (semester_id, code, class_number, class_name, description, instructor_id, archived)
+                VALUES (:semester_id, :code, :class_number, :class_name, :description, :instructor_id, 0)
             """, new_class_data)
             conn.commit()
 
@@ -477,7 +477,7 @@ def import_canvas_students(class_id):
     class_assignments = []
     if also_add_to_assignments:
         class_assignments = conn.execute("""
-            SELECT id, name, start_date, completion_date, parent_step_id
+            SELECT id, name, start_date, completion_date, parent_step_id, frame_start, frame_end
             FROM assignments
             WHERE class_id = ?
         """, (class_id,)).fetchall()
@@ -537,14 +537,16 @@ def import_canvas_students(class_id):
                 if not already_assigned:
                     conn.execute("""
                         INSERT INTO individual_assignments
-                        (assignment_id, users_id, name, start_date, completion_date)
-                        VALUES (?, ?, ?, ?, ?)
+                        (assignment_id, users_id, name, start_date, completion_date, frame_start, frame_end)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (
                         assignment["id"],
                         user_id,
                         assignment["name"],
                         assignment["start_date"],
-                        assignment["completion_date"]
+                        assignment["completion_date"],
+                        assignment["frame_start"],
+                        assignment["frame_end"]
                     ))
                     ia_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -653,13 +655,50 @@ def save_assignment_config_to_disk():
         if not data:
             return jsonify({"success": False, "error": "No data received."}), 400
 
-        filepath = os.path.join("C:/Cincy/Configs", "assignments_config.json")
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
+        # Authoritative local write -- Flask always reads from here.
+        local_dir = "C:/Cincy/Configs"
+        local_path = os.path.join(local_dir, "assignments_config.json")
+        _atomic_write_json(local_dir, local_path, data)
 
-        return jsonify({"success": True})
+        # Mirror to artscifs1 so the lab installer's step 19 can pull
+        # from %SRC% like every other asset, instead of hitting
+        # GAAAP1PRD01W's c$ admin share (SYSTEM-as-another-machine
+        # can't auth there -- see install_log ERROR 5 2026-08-10).
+        # Best-effort: a share hiccup must never block the save itself.
+        share_warning = None
+        share_dir = r"\\artscifs1.ad.uc.edu\Departments\GAA\UC_GAA\Configs"
+        share_path = os.path.join(share_dir, "assignments_config.json")
+        try:
+            _atomic_write_json(share_dir, share_path, data)
+        except Exception as share_err:
+            share_warning = f"Saved locally, but sync to share failed: {share_err}"
+            current_app.logger.warning(
+                "assignments_config.json share sync failed: %s", share_err
+            )
+
+        resp = {"success": True}
+        if share_warning:
+            resp["warning"] = share_warning
+        return jsonify(resp)
+
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _atomic_write_json(dir_path, final_path, data):
+    """Write JSON to a temp file in dir_path, then atomically replace
+    final_path. Prevents a lab installer robocopy from ever reading a
+    half-written file mid-save."""
+    os.makedirs(dir_path, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, final_path)  # atomic on same volume
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
     
 @classes_bp.route('/api/assignment-config/save-draft', methods=['POST'])
 @role_required('classes', ['Instructor', 'Admin'])
@@ -781,64 +820,5 @@ def export_class_zip(class_id):
 
     except Exception as e:
         print("Export ZIP error:", e)
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-# ----------------------------------------------------------------------------------
-# EXPORT STUDENTS JSON (for GAA Home Tools)
-# ----------------------------------------------------------------------------------
-
-@classes_bp.route('/api/export_students_json/<int:class_id>', methods=['GET'])
-@role_required('classes', ['Instructor', 'Admin'])
-def export_students_json(class_id):
-    """
-    Export enrolled students for a class as a downloadable students.json file.
-    Used to populate the student name dropdown in GAA_HOME_Assignments.py.
-    Names are sanitized to FirstnameLastname format (no spaces, no special chars).
-    """
-    try:
-        db = get_db()
-
-        # Verify class exists
-        class_row = db.execute("""
-            SELECT c.class_name, s.year, s.term
-            FROM classes c
-            JOIN semesters s ON c.semester_id = s.id
-            WHERE c.id = ?
-        """, (class_id,)).fetchone()
-
-        if not class_row:
-            return jsonify({"error": "Class not found"}), 404
-
-        # Get all enrolled students for this class
-        students = db.execute("""
-            SELECT u.name
-            FROM users u
-            JOIN class_enrollments ce ON u.id = ce.user_id
-            WHERE ce.class_id = ?
-            ORDER BY u.name
-        """, (class_id,)).fetchall()
-
-        # Sanitize: "Jane Doe" -> "JaneDoe"
-        sanitized = []
-        for row in students:
-            clean = re.sub(r"[^A-Za-z0-9]", "", row["name"].strip())
-            if clean:
-                sanitized.append(clean)
-
-        # Return as downloadable JSON file
-        json_bytes = json.dumps(sanitized, indent=2).encode("utf-8")
-        buffer = BytesIO(json_bytes)
-        buffer.seek(0)
-
-        return send_file(
-            buffer,
-            mimetype="application/json",
-            as_attachment=True,
-            download_name="students.json"
-        )
-
-    except Exception as e:
-        print(f"Export students JSON error: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

@@ -9,10 +9,6 @@
         <!-- ✅ Right-Aligned Buttons -->
         {% if class_perm >= 2 or film_perm >= 2 %}
         <div class="flex justify-end space-x-3 mt-4">
-          <button id="open-config-modal"
-                  class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
-            Config Editor
-          </button>
           <a href="{{ url_for('classes.add_class_route') }}"
              class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700">
             Add Class
@@ -67,17 +63,14 @@
                 <td class="p-3 flex space-x-2">
                   <a href="{{ url_for('classes.edit_class', class_id=class_item['id']) }}"
                     class="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1 rounded-lg">Edit</a>
+                  <button type="button" class="config-class-btn bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-lg"
+                    data-class-id="{{ class_item['id'] }}" data-class-name="{{ class_item['class_name'] }}">
+                    Config
+                  </button>
                   <button type="button" class="bg-red-800 hover:bg-red-600 text-white px-3 py-1 rounded-lg"
                     onclick="confirmDeleteClass({{ class_item['id'] }})">
                     Delete
                   </button>
-                  {% if 'Summer' in class_item['semester'] %}
-                  <a href="{{ url_for('classes.export_students_json', class_id=class_item['id']) }}"
-                    class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded-lg"
-                    title="Download students.json for GAA Home Tools">
-                    Students JSON
-                  </a>
-                  {% endif %}
                 </td>
               </tr>
               {% endfor %}
@@ -96,64 +89,26 @@
 
 
 
-<!-- Config Modal -->
-<div id="semester-config-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden z-50 flex justify-center items-center">
+<!-- Class Config Modal -->
+<div id="class-config-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden z-50 flex justify-center items-center">
   <div class="bg-red-950 text-white rounded-lg shadow-lg w-11/12 max-w-4xl p-6 overflow-auto max-h-[90vh]">
     <div class="flex justify-between items-center mb-4">
-      <h2 class="text-xl font-bold">Assignment Config Editor</h2>
+      <h2 id="class-config-title" class="text-xl font-bold">Assignment Config</h2>
     </div>
 
-    <div class="mb-4">
-      <label class="block font-semibold mb-1">Semester</label>
-      <select id="semester-select" class="border rounded px-3 py-2 w-full bg-white text-black"></select>
-    </div>
-    <div id="semester-config-body" class="mt-4"></div>
-    <div id="class-container"></div>
+    <div id="class-config-container"></div>
 
     <div class="mt-6 flex justify-between items-center">
       <!-- Left-aligned -->
-      <button id="add-class-btn" class="bg-blue-700 text-white px-4 py-2 rounded">
-        + Add Class
+      <button id="class-config-add-assignment-btn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
+        + Add Assignment
       </button>
-    
+
       <!-- Right-aligned grouped buttons -->
       <div class="flex flex-wrap justify-end gap-3">
-        <button id="load-old-btn" class="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700">Load Old
-          Config</button>
-        <button onclick="closeSemesterConfigModal()" class="px-4 py-2 bg-gray-400 text-white rounded">Cancel</button>
-        <button onclick="saveDraftConfig()" class="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600">Save
-          Draft</button>
-        <button onclick="saveSemesterConfig()" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Save
-          JSON</button>
+        <button onclick="closeClassConfigModal()" class="px-4 py-2 bg-gray-400 text-white rounded">Cancel</button>
+        <button onclick="saveClassConfig()" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Save</button>
       </div>
-    </div>    
-  </div>
-</div>
-
-
-<div id="new-class-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden z-50 flex justify-center items-center">
-  <div class="bg-red-950 text-white rounded-lg shadow-lg w-full max-w-md p-6">
-    <h2 class="text-lg font-bold mb-4">Add New Class</h2>
-
-    <label class="block mb-2">Choose Existing or Enter New</label>
-    <select id="existing-class-dropdown" class="w-full mb-3 p-2 border rounded bg-white text-black">
-      <option value="">-- Select a Class --</option>
-    </select>
-
-    <input id="new-class-input" type="text" placeholder="Or enter a new class name"
-      class="w-full mb-3 p-2 border rounded bg-white text-black" />
-    
-    <!-- ✅ Add checkbox right here -->
-    <div class="mb-4">
-      <label class="text-white text-sm">
-        <input type="checkbox" id="include-assignments-checkbox" class="mr-1">
-        Automatically include assignments in this class
-      </label>
-    </div>
-
-    <div class="flex justify-end space-x-2">
-      <button onclick="closeNewClassModal()" class="px-4 py-2 bg-gray-400 text-white rounded">Cancel</button>
-      <button onclick="confirmNewClass()" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">Add</button>
     </div>
   </div>
 </div>
@@ -198,7 +153,7 @@
 
 
 <script>
-  let assignmentsData = {};
+  let classAssignments = {};
   let rigList = [];
 </script>
 

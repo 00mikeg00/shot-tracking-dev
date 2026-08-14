@@ -66,6 +66,10 @@
                 "weeks": 2
             },
             {
+                "name": "Proxy",
+                "weeks": 0
+            },
+            {
                 "name": "Modeling",
                 "weeks": 3
             },
