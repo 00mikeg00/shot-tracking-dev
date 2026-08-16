@@ -1645,10 +1645,15 @@ def get_previous_version():
 @review_routes.route("/list_versions", methods=["GET"])
 def list_versions():
     """
-    Lists prior REVIEWED versions of the same shot as file_path (i.e. those
-    with a _v{N}_R.json annotation sidecar) -- only reviewed versions have
-    annotations to ghost, so an unreviewed sibling wouldn't have anything
-    to show in the cross-version onion-skin compare feature.
+    Lists prior REVIEWED versions of the same shot as file_path -- "reviewed"
+    meaning a _v{N}_R.<ext> video exists, since that's the signal a grader
+    actually looked at it (e.g. "The Blinker_v1_R.webm" while the artist is
+    now on "The Blinker_v2.webm"). Matched on the video file rather than the
+    _R.json sidecar: save_reviewed always writes a json alongside the
+    renamed video, but requiring it here would silently drop any version
+    reviewed through a path that didn't (or whose json got lost/moved) --
+    a version with a video but no strokes drawn should still show up in
+    the compare list, just with nothing to ghost.
     """
     current_path = request.args.get("file_path", "")
     if not current_path:
@@ -1663,14 +1668,21 @@ def list_versions():
 
     base_name = match.group(1)
     current_version = int(match.group(2))
+    extension = match.group(4)
 
     versions = []
     for f in os.listdir(directory):
-        m = re.match(rf"{re.escape(base_name)}_v(\d+)_R\.json$", f, re.IGNORECASE)
+        m = re.match(rf"{re.escape(base_name)}_v(\d+)_R{re.escape(extension)}$", f, re.IGNORECASE)
         if m:
             v = int(m.group(1))
-            if v != current_version:
-                versions.append({"version": v, "json_path": os.path.join(directory, f)})
+            if v == current_version:
+                continue
+            json_path = os.path.join(directory, f"{base_name}_v{v}_R.json")
+            versions.append({
+                "version": v,
+                "json_path": json_path,
+                "has_annotations": os.path.exists(json_path)
+            })
 
     versions.sort(key=lambda x: x["version"], reverse=True)
     return jsonify({"versions": versions})

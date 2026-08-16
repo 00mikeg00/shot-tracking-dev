@@ -33,7 +33,7 @@ export default function CompareVersionSettings({ versions, selectedVersion, onSe
               <option value="">-- Select a version --</option>
               {versions.map((v) => (
                 <option key={v.version} value={v.version}>
-                  v{v.version}
+                  v{v.version}{!v.has_annotations ? " (no annotations)" : ""}
                 </option>
               ))}
             </select>
