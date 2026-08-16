@@ -152,36 +152,50 @@
           </td>
       
           <td class="px-4 py-2 align-middle">
-            <div class="flex flex-col md:flex-row items-center justify-center gap-2">
-              <a href="{{ url_for('films.edit_scene_route', film_id=film.id, scene_id=scene.id) }}"
-                class="bg-yellow-600 hover:bg-yellow-500 text-white px-3 py-1 rounded text-sm">
-                Edit
-              </a>
-              <a href="shottracker://open?action=scene_layout&scene_id={{ scene.id }}&login_name={{ session['login_name'] | urlencode }}"
-                class="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm">
-                Open LAYOUT SETUP in Maya
-              </a>
-              <a href="{{ url_for('films.edit_layout_config', film_id=film.id, scene_id=scene.id) }}"
-                class="bg-purple-700 hover:bg-purple-600 text-white px-3 py-1 rounded text-sm">
-                Edit Layout Config
-              </a>
-              {% if scene.layout_done %}
-              <span class="bg-gray-600 text-white px-3 py-1 rounded text-sm inline-block cursor-not-allowed">
-                LAYOUT SET Approved
-              </span>
-              {% else %}
-              <button type="button" data-scene-id="{{ scene.id }}" data-login-name="{{ session['login_name'] }}"
-                onclick="markSceneLayoutDone(this)"
-                class="bg-green-700 hover:bg-green-600 text-white px-3 py-1 rounded text-sm">
-                Mark Layout Done
-              </button>
-              {% endif %}
-              <form id="delete-scene-form-{{ scene.id }}" method="POST"
-                action="{{ url_for('films.delete_scene_route', scene_id=scene.id) }}" style="display: none;"></form>
-              <button type="button" onclick="confirmDeleteScene({{ scene.id }})"
-                class="bg-red-800 hover:bg-red-600 text-white px-3 py-1 rounded text-sm">
-                Delete
-              </button>
+            <div class="flex flex-col md:flex-row items-start justify-center gap-4">
+
+              <div class="flex flex-col gap-2 w-full md:w-auto">
+                <a href="shottracker://open?action=scene_layout&scene_id={{ scene.id }}&login_name={{ session['login_name'] | urlencode }}"
+                  class="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm text-center">
+                  Open LAYOUT SETUP in Maya
+                </a>
+                <a href="{{ url_for('films.edit_layout_config', film_id=film.id, scene_id=scene.id) }}"
+                  class="bg-purple-700 hover:bg-purple-600 text-white px-3 py-1 rounded text-sm text-center">
+                  Edit Layout Config
+                </a>
+                {% if scene.layout_done %}
+                <span class="bg-gray-600 text-white px-3 py-1 rounded text-sm inline-block cursor-not-allowed text-center">
+                  LAYOUT SET Approved
+                </span>
+                {% else %}
+                <button type="button" data-scene-id="{{ scene.id }}" data-login-name="{{ session['login_name'] }}"
+                  onclick="markSceneLayoutDone(this)"
+                  class="bg-green-700 hover:bg-green-600 text-white px-3 py-1 rounded text-sm">
+                  Mark Layout Done
+                </button>
+                {% endif %}
+              </div>
+
+              <div class="flex flex-col gap-2 w-full md:w-auto">
+                <button type="button" onclick="openDavinciExportDialog({{ scene.id }})"
+                  class="bg-teal-700 hover:bg-teal-600 text-white px-3 py-1 rounded text-sm">
+                  Export to DaVinci
+                </button>
+              </div>
+
+              <div class="flex flex-col gap-2 w-full md:w-auto">
+                <a href="{{ url_for('films.edit_scene_route', film_id=film.id, scene_id=scene.id) }}"
+                  class="bg-yellow-600 hover:bg-yellow-500 text-white px-3 py-1 rounded text-sm text-center">
+                  Edit
+                </a>
+                <form id="delete-scene-form-{{ scene.id }}" method="POST"
+                  action="{{ url_for('films.delete_scene_route', scene_id=scene.id) }}" style="display: none;"></form>
+                <button type="button" onclick="confirmDeleteScene({{ scene.id }})"
+                  class="bg-red-800 hover:bg-red-600 text-white px-3 py-1 rounded text-sm">
+                  Delete
+                </button>
+              </div>
+
             </div>
           </td>
         </tr>
