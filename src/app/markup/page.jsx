@@ -8,6 +8,7 @@ import VideoPlayer from "../../components/VideoPlayer";
 import DrawingTools from "../../components/DrawingTools";
 import SideBar from "../../components/SideBar";
 import OnionSkinSettings from "../../components/OnionSkinSettings";
+import CompareVersionSettings from "../../components/CompareVersionSettings";
 import Swal from "sweetalert2";
 
 
@@ -52,7 +53,6 @@ export default function MarkupTool() {
   const [selectedCategory, setSelectedCategory] = useState("assignments");
   const [fileList, setFileList] = useState({ assignments: [], films: [] });
   const [selectedFile, setSelectedFile] = useState(null);
-  const [showSceneModal, setShowSceneModal] = useState(false);
   const [scenes, setScenes] = useState([]);
   const [films, setFilms] = useState([]);
   const [steps, setSteps] = useState([]);
@@ -96,6 +96,15 @@ export default function MarkupTool() {
     beforeColor: "#0000ff",
     afterColor: "#34ec90ff"
   });
+  const [compareConfig, setCompareConfig] = useState({
+    enabled: false,
+    color: "#ffa500",
+    opacity: 0.4
+  });
+  const [compareVersions, setCompareVersions] = useState([]);
+  const [compareVersion, setCompareVersion] = useState("");
+  const [compareAnnotations, setCompareAnnotations] = useState({});
+  const [compareVideoUrl, setCompareVideoUrl] = useState(null);
 
 
   // --- Step 1: hard separation between THUMB and SB ---
@@ -335,18 +344,6 @@ export default function MarkupTool() {
     console.warn("❌ No matching shot_id found for", item.file_name);
     return null;
   }
-
-  useEffect(() => {
-    if (!showSceneModal) return;
-
-    fetch(`${API_BASE_URL}/review/films`)
-      .then((res) => res.json())
-      .then((data) => {
-        console.log("🎬 Loaded films for modal:", data);
-        setFilms(data);
-      })
-      .catch((err) => console.error("❌ Failed to load films:", err));
-  }, [showSceneModal]);
 
   async function saveCurrentStatus() {
     const sceneId =
@@ -1173,6 +1170,52 @@ export default function MarkupTool() {
     } catch (err) {
       console.error("❌ Failed to open previous version:", err);
     }
+  };
+
+  // Cross-version onion skin: whenever the selected file changes, look up
+  // which prior versions of this same shot were actually reviewed (matched
+  // on the _R video existing, see list_versions) and reset any comparison
+  // left over from the previous file.
+  useEffect(() => {
+    setCompareVersions([]);
+    setCompareVersion("");
+    setCompareAnnotations({});
+    setCompareVideoUrl(null);
+    setCompareConfig((prev) => ({ ...prev, enabled: false }));
+
+    if (!selectedItem?.file_path) return;
+
+    fetch(`${API_BASE_URL}/review/list_versions?file_path=${encodeURIComponent(selectedItem.file_path)}`)
+      .then((res) => res.json())
+      .then((data) => setCompareVersions(Array.isArray(data.versions) ? data.versions : []))
+      .catch((err) => console.warn("❌ Could not load version list:", err));
+  }, [selectedItem?.file_path]);
+
+  const handleSelectCompareVersion = (versionStr) => {
+    setCompareVersion(versionStr);
+
+    if (!versionStr) {
+      setCompareAnnotations({});
+      setCompareVideoUrl(null);
+      return;
+    }
+
+    const entry = compareVersions.find((v) => String(v.version) === versionStr);
+    if (!entry) return;
+
+    // The old video itself is the primary thing being compared -- strokes
+    // are a bonus overlay on top of it, and only exist if that version was
+    // ever drawn on (see has_annotations in list_versions).
+    setCompareVideoUrl(
+      entry.video_path
+        ? `${API_BASE_URL}/review/get_video?path=${encodeURIComponent(entry.video_path)}`
+        : null
+    );
+
+    fetch(`${API_BASE_URL}/review/get_annotation_file?path=${encodeURIComponent(entry.json_path)}`)
+      .then((res) => (res.ok ? res.json() : {}))
+      .then((data) => setCompareAnnotations(data && typeof data === "object" ? data : {}))
+      .catch((err) => console.warn("❌ Could not load compare version annotations:", err));
   };
 
   const handleSave = async () => {
@@ -2446,87 +2489,6 @@ export default function MarkupTool() {
           </div>
         </div>
 
-        {/* 🎬 Scene Selection Modal */}
-        {showSceneModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
-            <div className="bg-gray-900 border border-gray-700 justify-center rounded-2xl shadow-2xl w-[400px] p-6">
-              <h2 className="text-xl font-semibold text-white mb-4">Start Review Session</h2>
-
-              {/* Film */}
-              <label className="block text-gray-300 mb-1">Film</label>
-              <select
-                className="w-full mb-3 bg-gray-800 text-white p-2 rounded-lg"
-                value={selectedFilm}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setSelectedFilm(val);
-                  loadScenes(val);
-                  loadSteps(val);
-                }}
-              >
-                <option value="">Select Film</option>
-                {films.map((film) => (
-                  <option key={film.id} value={film.id}>
-                    {film.name}
-                  </option>
-                ))}
-              </select>
-
-              {/* Scene */}
-              <label className="block text-gray-300 mb-1">Scene</label>
-              <select
-                className="w-full mb-3 bg-gray-800 text-white p-2 rounded-lg"
-                value={selectedScene}
-                onChange={(e) => setSelectedScene(e.target.value)}
-              >
-                <option value="">Select Scene</option>
-                {scenes.map(s => (
-                  <option key={s.id} value={s.id}>{s.scene_number}</option>
-                ))}
-              </select>
-
-              {/* Step */}
-              <label className="block text-gray-300 mb-1">Step</label>
-              <select
-                className="w-full mb-3 bg-gray-800 text-white p-2 rounded-lg"
-                value={selectedStep}
-                onChange={(e) => setSelectedStep(e.target.value)}
-              >
-                <option value="">Select Step</option>
-                {steps.map(st => (
-                  <option key={st.id} value={st.short_code}>
-                    {st.step_name} ({st.short_code})
-                  </option>
-                ))}
-              </select>
-
-              {/* Buttons */}
-              <div className="flex justify-end gap-3 mt-4">
-                <button
-                  className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-1 rounded-lg"
-                  onClick={() => setShowSceneModal(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  id="startSceneReviewBtn"
-                  className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded-lg"
-                  onClick={() => {
-                    console.log("🎬 Starting review for:", {
-                      selectedFilm,
-                      selectedScene,
-                      selectedStep,
-                    });
-                    setShowSceneModal(false);
-                    startSceneReview(selectedFilm, selectedScene, selectedStep); // next step hook
-                  }}
-                >
-                  Start
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
         {/* 🎞️ Storyboard Review Section */}
         {storyboardMode && (
           <div className="mt-4 bg-gray-900 rounded-lg p-4 border border-gray-700 w-full max-w-4xl">
@@ -2653,6 +2615,11 @@ export default function MarkupTool() {
             setClearCanvas={handleSetClearCanvas}
             canvasKey={canvasKey}
             onionSkinConfig={onionSkinConfig}
+            compareAnnotations={compareAnnotations}
+            compareEnabled={compareConfig.enabled}
+            compareColor={compareConfig.color}
+            compareVideoUrl={compareVideoUrl}
+            compareOpacity={compareConfig.opacity}
           />
         ) : (
           <div className="flex items-center justify-center h-full text-gray-400">
@@ -2670,45 +2637,6 @@ export default function MarkupTool() {
           boxSizing: "border-box",
         }}
       >
-        {/* 🎬 Start Review Session Button */}
-        <div className="w-full mb-1 flex justify-left">
-          <button
-            id="openSceneModalBtn"
-            onClick={() => setShowSceneModal(true)} // 👈 opens modal
-            className="bg-blue-600 hover:bg-blue-500 text-white text-sm px-2 py-1 rounded-md"
-          >
-            🎬 Start Review Session
-          </button>
-          {/* Hidden playback trigger for auto-start */}
-          <button
-            id="autoStartReviewBtn"
-            style={{ display: "none" }}
-            onClick={() => {
-              console.log("🎬 Auto-starting Scene Review playback...");
-              const playBtn =
-                typeof document !== "undefined"
-                  ? document.getElementById("scenePlayBtn")
-                  : null;
-              if (playBtn) playBtn.click();
-            }}
-          >
-            Hidden Auto-Start
-          </button>
-        </div>
-
-        {/* 🎞️ Open Review Clips Button */}
-        <div className="w-full mb-4 flex justify-left">
-          <button
-            onClick={() => {
-              if (typeof window !== "undefined") {
-                window.open("/review/scene_reviews", "_blank");
-              }
-            }}
-            className="bg-purple-700 hover:bg-purple-600 text-white text-sm px-2 py-1 rounded-md mt-2"
-          >
-            🎞️ Open Review Clips
-          </button>
-        </div>
         <div>
         <button onClick={handleOpenPrevious}>
           View Previous Version
@@ -2731,6 +2659,14 @@ export default function MarkupTool() {
         <OnionSkinSettings
           config={onionSkinConfig}
           setConfig={setOnionSkinConfig}
+        />
+
+        <CompareVersionSettings
+          versions={compareVersions}
+          selectedVersion={compareVersion}
+          onSelectVersion={handleSelectCompareVersion}
+          config={compareConfig}
+          setConfig={setCompareConfig}
         />
 
         <div className="bg-gray-800 p-3 rounded-lg mt-4">

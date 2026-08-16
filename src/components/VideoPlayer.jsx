@@ -24,6 +24,11 @@ export default function VideoPlayer({
     undoLastChange,
     redoLastChange,
     onionSkinConfig,
+    compareAnnotations,
+    compareEnabled,
+    compareColor,
+    compareVideoUrl,
+    compareOpacity,
     selectedAssignment,
     onSeek,
     onDraw
@@ -38,8 +43,35 @@ export default function VideoPlayer({
     const [onionSkinEnabled, setOnionSkinEnabled] = useState(false);
 
     const videoRef = useRef(null);
+    const compareVideoRef = useRef(null);
     const isDraggingRef = useRef(false);
     const fps = 24;
+
+    // Cross-version compare: the ghost is a real <video> element rendered
+    // on top of the main one (see JSX below), styled with the same
+    // object-contain sizing so the browser scales/letterboxes it exactly
+    // the way it already does for the main video -- no manual scale/offset
+    // math needed. This effect just keeps its currentTime following
+    // whatever frame the artist is scrubbing to; the browser repaints it
+    // on its own once the seek lands.
+    useEffect(() => {
+        const v = compareVideoRef.current;
+        if (!v || !compareVideoUrl) return;
+
+        const target = currentFrame / fps;
+        const seekToTarget = () => {
+            if (Math.abs(v.currentTime - target) > 1 / fps / 2) {
+                v.currentTime = target;
+            }
+        };
+
+        if (v.readyState >= 1) {
+            seekToTarget();
+        } else {
+            v.addEventListener("loadedmetadata", seekToTarget, { once: true });
+            return () => v.removeEventListener("loadedmetadata", seekToTarget);
+        }
+    }, [currentFrame, compareVideoUrl, fps]);
 
     useEffect(() => {
         if (!selectedFile) {
@@ -302,6 +334,16 @@ export default function VideoPlayer({
             <div className="flex justify-center items-center w-full max-w-[1600px]"
                 style={{ maxHeight: "calc(100vh - 220px)" }}>
                 <div className="relative w-full h-full mx-auto border-2 border-gray-500 bg-black">
+                    {compareVideoUrl && (
+                        <video
+                            ref={compareVideoRef}
+                            src={compareVideoUrl}
+                            muted
+                            preload="auto"
+                            className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                            style={{ opacity: compareEnabled ? compareOpacity : 0 }}
+                        />
+                    )}
                     {selectedFile ? (
                         /\.(png|jpe?g)$/i.test(selectedFile) ? (
                             <>
@@ -337,6 +379,9 @@ export default function VideoPlayer({
                                         redoLastChange={redoLastChange}
                                         onionSkinEnabled={onionSkinEnabled}
                                         onionSkinConfig={onionSkinConfig}
+                                        compareAnnotations={compareAnnotations}
+                                        compareEnabled={compareEnabled}
+                                        compareColor={compareColor}
                                     />
                                 )}
                             </>
@@ -373,6 +418,9 @@ export default function VideoPlayer({
                                             redoLastChange={redoLastChange}
                                             onionSkinEnabled={onionSkinEnabled}
                                             onionSkinConfig={onionSkinConfig}
+                                            compareAnnotations={compareAnnotations}
+                                            compareEnabled={compareEnabled}
+                                            compareColor={compareColor}
                                         />
                                     )}
                             </>
