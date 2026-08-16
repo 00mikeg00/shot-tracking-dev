@@ -43,7 +43,20 @@ export default function CompareVersionSettings({ versions, selectedVersion, onSe
           </div>
 
           <div>
-            <label className="text-sm">Ghost Color:</label>
+            <label className="text-sm">Ghost Opacity: {Math.round(config.opacity * 100)}%</label>
+            <input
+              type="range"
+              min="0.1"
+              max="0.9"
+              step="0.05"
+              value={config.opacity}
+              onChange={(e) => handleChange("opacity", Number(e.target.value))}
+              className="w-full"
+            />
+          </div>
+
+          <div>
+            <label className="text-sm">Annotation Ghost Color:</label>
             <input
               type="color"
               value={config.color}

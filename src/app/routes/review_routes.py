@@ -1681,6 +1681,7 @@ def list_versions():
             versions.append({
                 "version": v,
                 "json_path": json_path,
+                "video_path": os.path.join(directory, f),
                 "has_annotations": os.path.exists(json_path)
             })
 
