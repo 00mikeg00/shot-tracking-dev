@@ -1641,6 +1641,40 @@ def get_previous_version():
         "previous_path": previous_file
     })
 
+
+@review_routes.route("/list_versions", methods=["GET"])
+def list_versions():
+    """
+    Lists prior REVIEWED versions of the same shot as file_path (i.e. those
+    with a _v{N}_R.json annotation sidecar) -- only reviewed versions have
+    annotations to ghost, so an unreviewed sibling wouldn't have anything
+    to show in the cross-version onion-skin compare feature.
+    """
+    current_path = request.args.get("file_path", "")
+    if not current_path:
+        return jsonify({"versions": []})
+
+    directory = os.path.dirname(current_path)
+    filename = os.path.basename(current_path)
+
+    match = re.match(r"(.*)_v(\d+)(_R)?(\.\w+)", filename)
+    if not match or not os.path.isdir(directory):
+        return jsonify({"versions": []})
+
+    base_name = match.group(1)
+    current_version = int(match.group(2))
+
+    versions = []
+    for f in os.listdir(directory):
+        m = re.match(rf"{re.escape(base_name)}_v(\d+)_R\.json$", f, re.IGNORECASE)
+        if m:
+            v = int(m.group(1))
+            if v != current_version:
+                versions.append({"version": v, "json_path": os.path.join(directory, f)})
+
+    versions.sort(key=lambda x: x["version"], reverse=True)
+    return jsonify({"versions": versions})
+
 # ----------------------------------------------------------------------------------------------------------------------
 # SAVE FILES
 # ----------------------------------------------------------------------------------------------------------------------

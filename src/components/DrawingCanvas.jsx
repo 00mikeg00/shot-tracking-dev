@@ -16,7 +16,10 @@ export default function DrawingCanvas({
   setRedoStack,
   undoLastChange,
   redoLastChange,
-  onionSkinConfig
+  onionSkinConfig,
+  compareAnnotations = {},
+  compareEnabled = false,
+  compareColor = "#ffa500"
 }) {
   const canvasRef = useRef(null);
   const contextRef = useRef(null);
@@ -61,7 +64,7 @@ export default function DrawingCanvas({
 
   useEffect(() => {
     redrawCanvas();
-  }, [frameAnnotations, currentFrame, onionSkinConfig]);
+  }, [frameAnnotations, currentFrame, onionSkinConfig, compareAnnotations, compareEnabled, compareColor]);
 
 
 
@@ -173,6 +176,13 @@ export default function DrawingCanvas({
           drawFrameAnnotations(frameAnnotations[frame]?.strokes || [], onionSkinConfig.afterColor, 0.3);
         }
       }
+    }
+
+    // Cross-version onion skin: ghost the SAME frame number's strokes from
+    // a prior reviewed version, so the artist can see what changed between
+    // that version and the one they're currently marking up.
+    if (compareEnabled && compareAnnotations[currentFrame]) {
+      drawFrameAnnotations(compareAnnotations[currentFrame]?.strokes || [], compareColor, 0.35);
     }
 
     const strokesForFrame = frameAnnotations[currentFrame]?.strokes || [];

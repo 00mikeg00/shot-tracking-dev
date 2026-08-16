@@ -8,6 +8,7 @@ import VideoPlayer from "../../components/VideoPlayer";
 import DrawingTools from "../../components/DrawingTools";
 import SideBar from "../../components/SideBar";
 import OnionSkinSettings from "../../components/OnionSkinSettings";
+import CompareVersionSettings from "../../components/CompareVersionSettings";
 import Swal from "sweetalert2";
 
 
@@ -96,6 +97,13 @@ export default function MarkupTool() {
     beforeColor: "#0000ff",
     afterColor: "#34ec90ff"
   });
+  const [compareConfig, setCompareConfig] = useState({
+    enabled: false,
+    color: "#ffa500"
+  });
+  const [compareVersions, setCompareVersions] = useState([]);
+  const [compareVersion, setCompareVersion] = useState("");
+  const [compareAnnotations, setCompareAnnotations] = useState({});
 
 
   // --- Step 1: hard separation between THUMB and SB ---
@@ -1173,6 +1181,41 @@ export default function MarkupTool() {
     } catch (err) {
       console.error("❌ Failed to open previous version:", err);
     }
+  };
+
+  // Cross-version onion skin: whenever the selected file changes, look up
+  // which prior versions of this same shot were actually reviewed (only
+  // those have a _R.json with annotations worth ghosting) and reset any
+  // comparison left over from the previous file.
+  useEffect(() => {
+    setCompareVersions([]);
+    setCompareVersion("");
+    setCompareAnnotations({});
+    setCompareConfig((prev) => ({ ...prev, enabled: false }));
+
+    if (!selectedItem?.file_path) return;
+
+    fetch(`${API_BASE_URL}/review/list_versions?file_path=${encodeURIComponent(selectedItem.file_path)}`)
+      .then((res) => res.json())
+      .then((data) => setCompareVersions(Array.isArray(data.versions) ? data.versions : []))
+      .catch((err) => console.warn("❌ Could not load version list:", err));
+  }, [selectedItem?.file_path]);
+
+  const handleSelectCompareVersion = (versionStr) => {
+    setCompareVersion(versionStr);
+
+    if (!versionStr) {
+      setCompareAnnotations({});
+      return;
+    }
+
+    const entry = compareVersions.find((v) => String(v.version) === versionStr);
+    if (!entry) return;
+
+    fetch(`${API_BASE_URL}/review/get_annotation_file?path=${encodeURIComponent(entry.json_path)}`)
+      .then((res) => (res.ok ? res.json() : {}))
+      .then((data) => setCompareAnnotations(data && typeof data === "object" ? data : {}))
+      .catch((err) => console.warn("❌ Could not load compare version annotations:", err));
   };
 
   const handleSave = async () => {
@@ -2653,6 +2696,9 @@ export default function MarkupTool() {
             setClearCanvas={handleSetClearCanvas}
             canvasKey={canvasKey}
             onionSkinConfig={onionSkinConfig}
+            compareAnnotations={compareAnnotations}
+            compareEnabled={compareConfig.enabled}
+            compareColor={compareConfig.color}
           />
         ) : (
           <div className="flex items-center justify-center h-full text-gray-400">
@@ -2731,6 +2777,14 @@ export default function MarkupTool() {
         <OnionSkinSettings
           config={onionSkinConfig}
           setConfig={setOnionSkinConfig}
+        />
+
+        <CompareVersionSettings
+          versions={compareVersions}
+          selectedVersion={compareVersion}
+          onSelectVersion={handleSelectCompareVersion}
+          config={compareConfig}
+          setConfig={setCompareConfig}
         />
 
         <div className="bg-gray-800 p-3 rounded-lg mt-4">

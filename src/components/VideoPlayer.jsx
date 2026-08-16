@@ -24,6 +24,9 @@ export default function VideoPlayer({
     undoLastChange,
     redoLastChange,
     onionSkinConfig,
+    compareAnnotations,
+    compareEnabled,
+    compareColor,
     selectedAssignment,
     onSeek,
     onDraw
@@ -337,6 +340,9 @@ export default function VideoPlayer({
                                         redoLastChange={redoLastChange}
                                         onionSkinEnabled={onionSkinEnabled}
                                         onionSkinConfig={onionSkinConfig}
+                                        compareAnnotations={compareAnnotations}
+                                        compareEnabled={compareEnabled}
+                                        compareColor={compareColor}
                                     />
                                 )}
                             </>
@@ -373,6 +379,9 @@ export default function VideoPlayer({
                                             redoLastChange={redoLastChange}
                                             onionSkinEnabled={onionSkinEnabled}
                                             onionSkinConfig={onionSkinConfig}
+                                            compareAnnotations={compareAnnotations}
+                                            compareEnabled={compareEnabled}
+                                            compareColor={compareColor}
                                         />
                                     )}
                             </>
