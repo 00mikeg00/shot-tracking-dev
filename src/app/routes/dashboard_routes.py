@@ -2,7 +2,7 @@
 import os
 import glob
 import mimetypes
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from flask import Blueprint, render_template, session, jsonify, request, send_file, send_from_directory
 from app.database.db import get_db
 from app.utils.auth_utils import login_required, get_current_semester_id
@@ -12,6 +12,7 @@ from app.services.assignment_service import get_user_assignments_by_semester as 
 from app.services.film_service import get_user_films
 from app.services.shot_service import get_todo_shots
 from app.services.grade_service import get_student_grade_summary
+from app.utils.utils import MUTUALLY_EXCLUSIVE_STEP_GROUPS
 from collections import defaultdict
 from urllib.parse import quote
 
@@ -838,12 +839,18 @@ def serve_approved_film_file():
 #--------------------------------------------------------------------------------------------------------------
 def _resolve_active_asset_steps(conn, asset_ids):
     """
-    {asset_id: active_step_id}, using the same "lowest order_num unlocked
+    {asset_id: {active_step_id, ...}}, same base algorithm as Assets.py's
+    resolve_current_step_candidates(): the lowest order_num unlocked step
     among Modeling/Texture-Surface/Rigging, else the last one if all
-    locked" algorithm as Assets.py's resolve_current_step() -- computed
-    server-side here (not per-viewing-user's own assigned rows) because a
-    step's assignee can differ per step, so one user's own rows alone
-    don't carry enough context to know what's actually next for that asset.
+    locked -- EXCEPT if that step belongs to a mutual-exclusion group (see
+    MUTUALLY_EXCLUSIVE_STEP_GROUPS -- Character/Rigs' Texture-Surface/
+    Rigging), every other unlocked group member is included too, since
+    those don't gate each other's approval; step_checkouts (not this
+    function) is what still keeps only one of them open in Maya at once.
+    Computed server-side here (not per-viewing-user's own assigned rows)
+    because a step's assignee can differ per step, so one user's own rows
+    alone don't carry enough context to know what's actually next for that
+    asset.
     """
     if not asset_ids:
         return {}
@@ -851,9 +858,10 @@ def _resolve_active_asset_steps(conn, asset_ids):
     placeholders = ",".join("?" * len(asset_ids))
     rows = conn.execute(f"""
         SELECT
-            asa.asset_id, s.id AS step_id, s.order_num, sc.step_code AS short_code,
+            asa.asset_id, a.category, s.id AS step_id, s.order_num, sc.step_code AS short_code,
             sl.locked
         FROM asset_step_assignments asa
+        JOIN assets a ON a.id = asa.asset_id
         JOIN steps s ON s.id = asa.step_id
         LEFT JOIN step_codes sc ON sc.step_name = s.name
         LEFT JOIN step_locks sl
@@ -868,11 +876,71 @@ def _resolve_active_asset_steps(conn, asset_ids):
 
     active = {}
     for asset_id, steps in by_asset.items():
+        category = steps[0]["category"]
         unlocked = [s for s in steps if not s["locked"]]
-        chosen = min(unlocked, key=lambda s: s["order_num"]) if unlocked else max(steps, key=lambda s: s["order_num"])
-        active[asset_id] = chosen["step_id"]
+        if not unlocked:
+            chosen = max(steps, key=lambda s: s["order_num"])
+            active[asset_id] = {chosen["step_id"]}
+            continue
+
+        base = min(unlocked, key=lambda s: s["order_num"])
+        group = next(
+            (g for g in MUTUALLY_EXCLUSIVE_STEP_GROUPS.get(category, []) if base["short_code"] in g),
+            None
+        )
+        if group:
+            active[asset_id] = {s["step_id"] for s in unlocked if s["short_code"] in group}
+        else:
+            active[asset_id] = {base["step_id"]}
 
     return active
+
+
+def _resolve_checkout_blockers(conn, asset_ids):
+    """
+    {(asset_id, step_id): blocker_login_name} for every step whose
+    mutual-exclusion sibling (see MUTUALLY_EXCLUSIVE_STEP_GROUPS) currently
+    has a live checkout held by someone else -- lets the dashboard show
+    Rigging as locked-by-checkout BEFORE the artist launches Maya, instead
+    of only finding out from Assets.py's warning once it's already open.
+    Same 10-hour staleness window as launcher_routes.py's asset-steps
+    endpoints (duplicated here rather than imported since this module has
+    no other cross-import from launcher_routes).
+    """
+    if not asset_ids:
+        return {}
+
+    placeholders = ",".join("?" * len(asset_ids))
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=10)).isoformat(timespec="seconds")
+
+    rows = conn.execute(f"""
+        SELECT
+            asa.asset_id, asa.step_id, a.category, sc.step_code AS short_code,
+            checkout_sc.step_code AS checkout_short_code, u.login_name AS checked_out_by
+        FROM asset_step_assignments asa
+        JOIN assets a ON a.id = asa.asset_id
+        JOIN steps s ON s.id = asa.step_id
+        LEFT JOIN step_codes sc ON sc.step_name = s.name
+        JOIN step_checkouts sco ON sco.entity_type = 'asset_step' AND sco.entity_id = asa.asset_id
+        JOIN steps checkout_step ON checkout_step.id = sco.step_id
+        LEFT JOIN step_codes checkout_sc ON checkout_sc.step_name = checkout_step.name
+        JOIN users u ON u.id = sco.checked_out_by
+        WHERE asa.asset_id IN ({placeholders})
+          AND sco.heartbeat_at >= ?
+          AND sco.step_id != asa.step_id
+    """, (*asset_ids, cutoff)).fetchall()
+
+    blockers = {}
+    for row in rows:
+        group = next(
+            (g for g in MUTUALLY_EXCLUSIVE_STEP_GROUPS.get(row["category"], [])
+             if row["short_code"] in g and row["checkout_short_code"] in g),
+            None
+        )
+        if group:
+            blockers[(row["asset_id"], row["step_id"])] = row["checked_out_by"]
+
+    return blockers
 
 
 @dashboard_bp.route("/api/user_assets")
@@ -951,8 +1019,10 @@ def get_user_assets():
             item["step_nodes"] = []
 
     active_steps = _resolve_active_asset_steps(conn, list({item["asset_id"] for item in data}))
+    checkout_blockers = _resolve_checkout_blockers(conn, list({item["asset_id"] for item in data}))
     for item in data:
-        item["is_active_step"] = active_steps.get(item["asset_id"]) == item["step_id"]
+        item["is_active_step"] = item["step_id"] in active_steps.get(item["asset_id"], set())
+        item["checkout_blocked_by"] = checkout_blockers.get((item["asset_id"], item["step_id"]))
 
     return jsonify(data)
 

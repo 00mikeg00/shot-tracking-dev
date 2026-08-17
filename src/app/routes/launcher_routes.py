@@ -1,9 +1,10 @@
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from flask import Blueprint, request, jsonify
 from app.database.db import get_db
 from app.routes.assignments_routes import update_assignment_status_and_crossflow
+from app.utils.utils import MUTUALLY_EXCLUSIVE_STEP_GROUPS
 
 launcher_bp = Blueprint("launcher", __name__, url_prefix="/classes/api/launcher")
 
@@ -454,13 +455,24 @@ def asset_context():
     })
 
 
+# A checkout with no heartbeat in this long is treated as abandoned (Maya
+# crashed without checking in) and ignored -- read-time only, no cron.
+STALE_CHECKOUT_HOURS = 10
+
+
+def _checkout_cutoff():
+    return (datetime.now(timezone.utc) - timedelta(hours=STALE_CHECKOUT_HOURS)).isoformat(timespec="seconds")
+
+
 @launcher_bp.route("/asset-steps/status", methods=["GET"])
 def asset_steps_status():
     """
     Live lock state for every content step (Design/Modeling/Texture-
     Surface/Rigging/Shot Ready, never FB-prefixed) of one asset, same
     shape as steps_status() so Assets.py's resolve_current_step() (ported
-    from Assignments.py) works unmodified against either.
+    from Assignments.py) works unmodified against either. Also carries
+    live checkout state (step_checkouts) -- who currently has the file
+    open, independent of the approval lock above.
     """
     asset_id = request.args.get("asset_id", type=int)
     if not asset_id:
@@ -482,7 +494,11 @@ def asset_steps_status():
             locker.login_name AS locked_by,
             sl.locked_at,
             unlocker.login_name AS unlocked_by,
-            sl.unlocked_at
+            sl.unlocked_at,
+            sco.checked_out_at,
+            sco.heartbeat_at,
+            checkoutuser.login_name AS checked_out_by,
+            assignee.login_name AS assigned_to
         FROM asset_step_assignments asa
         JOIN steps s ON s.id = asa.step_id
         LEFT JOIN step_codes sc ON sc.step_name = s.name
@@ -490,10 +506,16 @@ def asset_steps_status():
             ON sl.entity_type = 'asset_step' AND sl.entity_id = ? AND sl.step_id = s.id
         LEFT JOIN users locker ON locker.id = sl.locked_by
         LEFT JOIN users unlocker ON unlocker.id = sl.unlocked_by
+        LEFT JOIN step_checkouts sco
+            ON sco.entity_type = 'asset_step' AND sco.entity_id = ? AND sco.step_id = s.id
+        LEFT JOIN users checkoutuser ON checkoutuser.id = sco.checked_out_by
+        LEFT JOIN users assignee ON assignee.id = asa.assigned_user
         WHERE asa.asset_id = ?
           AND s.name NOT LIKE 'FB %' AND s.name NOT LIKE 'Grade %'
         ORDER BY s.order_num ASC
-    """, (asset_id, asset_id)).fetchall()
+    """, (asset_id, asset_id, asset_id)).fetchall()
+
+    cutoff = _checkout_cutoff()
 
     steps = [{
         "step_id": row["step_id"],
@@ -505,6 +527,9 @@ def asset_steps_status():
         "locked_at": row["locked_at"],
         "unlocked_by": row["unlocked_by"],
         "unlocked_at": row["unlocked_at"],
+        "checked_out_by": row["checked_out_by"] if row["heartbeat_at"] and row["heartbeat_at"] >= cutoff else None,
+        "checked_out_at": row["checked_out_at"] if row["heartbeat_at"] and row["heartbeat_at"] >= cutoff else None,
+        "assigned_to": row["assigned_to"],
     } for row in rows]
 
     return jsonify({"asset_id": asset_id, "steps": steps})
@@ -581,3 +606,172 @@ def unlock_asset_step():
         "unlocked_by": login_name,
         "unlocked_at": now
     })
+
+
+def _sibling_step_codes(category, short_code):
+    """Other short_codes in category's mutual-exclusion group with short_code, or []."""
+    for group in MUTUALLY_EXCLUSIVE_STEP_GROUPS.get(category, []):
+        if short_code in group:
+            return sorted(group - {short_code})
+    return []
+
+
+def _find_live_sibling_checkout(db, asset_id, category, short_code, cutoff):
+    """
+    Returns the users row of whoever holds a live checkout on a sibling
+    step in short_code's mutual-exclusion group for this asset, or None.
+    """
+    siblings = _sibling_step_codes(category, short_code)
+    if not siblings:
+        return None
+
+    placeholders = ",".join("?" * len(siblings))
+    row = db.execute(f"""
+        SELECT u.login_name, sco.step_id
+        FROM step_checkouts sco
+        JOIN steps s ON s.id = sco.step_id
+        JOIN step_codes sc ON sc.step_name = s.name
+        JOIN users u ON u.id = sco.checked_out_by
+        WHERE sco.entity_type = 'asset_step' AND sco.entity_id = ?
+          AND sc.step_code IN ({placeholders})
+          AND sco.heartbeat_at >= ?
+    """, (asset_id, *siblings, cutoff)).fetchone()
+    return row
+
+
+@launcher_bp.route("/asset-steps/checkout", methods=["POST"])
+def checkout_asset_step():
+    """
+    Marks a step's Maya file as actively open, called by Assets.py right
+    before it opens the scene. Rejects (409) if a sibling step in the same
+    mutual-exclusion group (see MUTUALLY_EXCLUSIVE_STEP_GROUPS -- currently
+    just Character/Rigs' Texture-Surface/Rigging) is live-checked-out by
+    someone else, UNLESS force=true (the coordinator override picker in
+    individual_assets_view.html, which is allowed to open past this same
+    as it's already allowed to open past the normal approval gate).
+    """
+    data = request.get_json(silent=True) or {}
+    asset_id = data.get("asset_id")
+    step_name = (data.get("step_name") or "").strip()
+    login_name = (data.get("login_name") or "").strip()
+    force = bool(data.get("force"))
+
+    if not asset_id or not step_name or not login_name:
+        return jsonify({"error": "Missing asset_id, step_name, or login_name"}), 400
+
+    db = get_db()
+
+    if force:
+        step_row = db.execute("""
+            SELECT s.id, s.name FROM asset_step_assignments asa
+            JOIN steps s ON s.id = asa.step_id
+            WHERE asa.asset_id = ? AND s.name = ?
+        """, (asset_id, step_name)).fetchone()
+        user_row = db.execute("SELECT id FROM users WHERE login_name = ?", (login_name,)).fetchone()
+        if not step_row:
+            return jsonify({"error": f"Step '{step_name}' not found for this asset"}), 404
+        if not user_row:
+            return jsonify({"error": f"User '{login_name}' not found"}), 404
+    else:
+        step_row, user_row, error = _resolve_asset_step_owner(db, asset_id, step_name, login_name)
+        if error:
+            return error
+
+    asset_row = db.execute("SELECT category FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    category = asset_row["category"] if asset_row else None
+    short_code = db.execute(
+        "SELECT step_code FROM step_codes WHERE step_name = ?", (step_name,)
+    ).fetchone()
+    short_code = short_code["step_code"] if short_code else None
+
+    cutoff = _checkout_cutoff()
+    if not force and category and short_code:
+        blocker = _find_live_sibling_checkout(db, asset_id, category, short_code, cutoff)
+        if blocker:
+            return jsonify({
+                "error": f"A sibling step is currently open by {blocker['login_name']}",
+                "checked_out_by": blocker["login_name"]
+            }), 409
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    db.execute("""
+        INSERT INTO step_checkouts (entity_type, entity_id, step_id, checked_out_by, checked_out_at, heartbeat_at)
+        VALUES ('asset_step', ?, ?, ?, ?, ?)
+        ON CONFLICT(entity_type, entity_id, step_id)
+        DO UPDATE SET checked_out_by = excluded.checked_out_by, checked_out_at = excluded.checked_out_at, heartbeat_at = excluded.heartbeat_at
+    """, (asset_id, step_row["id"], user_row["id"], now, now))
+    db.commit()
+
+    return jsonify({
+        "success": True,
+        "step_id": step_row["id"],
+        "step_name": step_row["name"],
+        "checked_out_by": login_name,
+        "checked_out_at": now
+    })
+
+
+@launcher_bp.route("/asset-steps/checkin", methods=["POST"])
+def checkin_asset_step():
+    """Releases a checkout, called by Assets.py on Maya scene close/quit (best-effort -- a crash just leaves it to go stale, see STALE_CHECKOUT_HOURS)."""
+    data = request.get_json(silent=True) or {}
+    asset_id = data.get("asset_id")
+    step_name = (data.get("step_name") or "").strip()
+    login_name = (data.get("login_name") or "").strip()
+
+    if not asset_id or not step_name or not login_name:
+        return jsonify({"error": "Missing asset_id, step_name, or login_name"}), 400
+
+    db = get_db()
+
+    step_row = db.execute("""
+        SELECT s.id, s.name FROM asset_step_assignments asa
+        JOIN steps s ON s.id = asa.step_id
+        WHERE asa.asset_id = ? AND s.name = ?
+    """, (asset_id, step_name)).fetchone()
+    if not step_row:
+        return jsonify({"error": f"Step '{step_name}' not found for this asset"}), 404
+
+    db.execute("""
+        DELETE FROM step_checkouts
+        WHERE entity_type = 'asset_step' AND entity_id = ? AND step_id = ?
+    """, (asset_id, step_row["id"]))
+    db.commit()
+
+    return jsonify({"success": True, "step_id": step_row["id"], "step_name": step_row["name"]})
+
+
+@launcher_bp.route("/asset-steps/heartbeat", methods=["POST"])
+def heartbeat_asset_step():
+    """Bumps heartbeat_at on an existing checkout so a still-open session doesn't go stale mid-session. No-ops (404) if there's no checkout row to bump -- caller should re-checkout in that case."""
+    data = request.get_json(silent=True) or {}
+    asset_id = data.get("asset_id")
+    step_name = (data.get("step_name") or "").strip()
+    login_name = (data.get("login_name") or "").strip()
+
+    if not asset_id or not step_name or not login_name:
+        return jsonify({"error": "Missing asset_id, step_name, or login_name"}), 400
+
+    db = get_db()
+
+    step_row = db.execute("""
+        SELECT s.id FROM asset_step_assignments asa
+        JOIN steps s ON s.id = asa.step_id
+        WHERE asa.asset_id = ? AND s.name = ?
+    """, (asset_id, step_name)).fetchone()
+    user_row = db.execute("SELECT id FROM users WHERE login_name = ?", (login_name,)).fetchone()
+    if not step_row or not user_row:
+        return jsonify({"error": "Step or user not found"}), 404
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    cur = db.execute("""
+        UPDATE step_checkouts SET heartbeat_at = ?
+        WHERE entity_type = 'asset_step' AND entity_id = ? AND step_id = ? AND checked_out_by = ?
+    """, (now, asset_id, step_row["id"], user_row["id"]))
+    db.commit()
+
+    if cur.rowcount == 0:
+        return jsonify({"error": "No active checkout for this step/user"}), 404
+
+    return jsonify({"success": True, "heartbeat_at": now})

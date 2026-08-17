@@ -120,6 +120,18 @@ CATEGORY_FOLDER_MAP = {
     "BGs": "BGs"
 }
 
+# Step short_codes (see step_codes table) that don't gate each other's
+# approval within a category, unlike the normal strict order_num chain --
+# e.g. Character/Rigs' Texture-Surface and Rigging can both be worked on
+# independently once Modeling is approved. They still can't be open in
+# Maya at the same time (step_checkouts enforces that separately), since
+# both share one continuous version lineage on disk. Consulted by
+# resolve_current_step() in both dashboard_routes.py and deploy/Assets.py
+# -- keep those two in agreement with this map.
+MUTUALLY_EXCLUSIVE_STEP_GROUPS = {
+    "Character/Rigs": [{"TEX", "RIG"}],
+}
+
 
 def get_asset_category_dir(film_title, category):
     """Returns Assets/<Category>/ for this film, or None for an unmapped category."""

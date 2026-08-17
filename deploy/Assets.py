@@ -65,6 +65,15 @@ CATEGORY_FOLDER_MAP = {
 # nothing to open -- see run()'s current_step is None branch.
 FILE_VERSIONED_STEP_CODES = {"MOD", "TEX", "RIG", "LGTRIG"}
 
+# Mirrors app/utils/utils.py:MUTUALLY_EXCLUSIVE_STEP_GROUPS -- Texture-
+# Surface and Rigging no longer gate each other's approval for Character/
+# Rigs (both can be unlocked/current at once), but they still share one
+# continuous version lineage on disk, so only one may be OPEN in Maya at a
+# time -- see checkout_step()/the step_checkouts table server-side.
+MUTUALLY_EXCLUSIVE_STEP_GROUPS = {
+    "Character/Rigs": [{"TEX", "RIG"}],
+}
+
 _log_file = None
 
 
@@ -119,26 +128,139 @@ def fetch_asset_steps_status(asset_id):
         return None
 
 
-def resolve_current_step(steps):
+def _sibling_group(category, short_code):
+    """The mutual-exclusion group short_code belongs to for this category, or None."""
+    for group in MUTUALLY_EXCLUSIVE_STEP_GROUPS.get(category, []):
+        if short_code in group:
+            return group
+    return None
+
+
+def resolve_current_step_candidates(steps, category):
     """
-    Identical algorithm to Assignments.resolve_current_step(): among the
-    file-versioned steps (Modeling/Texture-Surface/Rigging here instead of
-    Blocking/Blocking Plus/Polish), the lowest order_num one that's
-    unlocked, or the last one if every one of them is locked. Returns None
-    if this asset's category has no file-versioned steps at all (e.g.
-    Props - 2D) -- that's an expected, not an error, case; see run().
+    Same base algorithm as the old single-value resolve_current_step():
+    among file-versioned steps, the lowest order_num one that's unlocked,
+    or the last one if every one of them is locked. BUT if that step
+    belongs to a mutual-exclusion group (see MUTUALLY_EXCLUSIVE_STEP_GROUPS
+    -- Character/Rigs' Texture-Surface/Rigging), every other group member
+    that's ALSO currently unlocked is included too, since group members
+    don't gate each other's approval -- see pick_open_target() for how one
+    is then chosen to actually open. Returns [] if this asset's category
+    has no file-versioned steps at all (e.g. Props - 2D) -- that's an
+    expected, not an error, case; see run().
     """
     if not steps:
-        return None
+        return []
 
     file_steps = [s for s in steps if s.get("short_code") in FILE_VERSIONED_STEP_CODES]
-    if file_steps:
-        unlocked = [s for s in file_steps if not s["locked"]]
-        if unlocked:
-            return min(unlocked, key=lambda s: s["order_num"])
-        return max(file_steps, key=lambda s: s["order_num"])
+    if not file_steps:
+        return []
 
-    return None
+    unlocked = [s for s in file_steps if not s["locked"]]
+    if not unlocked:
+        return [max(file_steps, key=lambda s: s["order_num"])]
+
+    base = min(unlocked, key=lambda s: s["order_num"])
+    group = _sibling_group(category, base.get("short_code"))
+    if not group:
+        return [base]
+
+    candidates = [s for s in unlocked if s.get("short_code") in group]
+    return sorted(candidates, key=lambda s: s["order_num"])
+
+
+def pick_open_target(candidates, login_name):
+    """
+    Of the (possibly several, for a parallel group) eligible steps, filters
+    out any live-checked-out by someone ELSE. Of what's left: the OPEN
+    button's shottracker:// URI doesn't carry which row was clicked (see
+    dashboard_films.js), so if more than one candidate remains, prefer
+    whichever is actually ASSIGNED to the calling artist -- e.g. Tex and
+    Rig both open, assigned to two different people, each hitting their
+    own dashboard's OPEN should get their own step, not whichever has the
+    lower order_num. Falls back to lowest order_num only when that still
+    doesn't narrow it to one (e.g. neither/both assigned to this login).
+    Returns None if every candidate is blocked by someone else (caller
+    should fail closed).
+    """
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+
+    open_candidates = [
+        s for s in candidates
+        if not s.get("checked_out_by") or s["checked_out_by"] == login_name
+    ]
+    if not open_candidates:
+        return None
+
+    assigned_to_me = [s for s in open_candidates if s.get("assigned_to") == login_name]
+    if len(assigned_to_me) == 1:
+        return assigned_to_me[0]
+
+    return min(open_candidates, key=lambda s: s["order_num"])
+
+
+def checkout_step(asset_id, step_name, login_name, force=False):
+    """Registers this step's file as actively open. Returns (ok, blocked_by)."""
+    try:
+        r = requests.post(
+            f"{SHOT_TRACKER_URL}/classes/api/launcher/asset-steps/checkout",
+            json={"asset_id": asset_id, "step_name": step_name, "login_name": login_name, "force": force},
+            timeout=10
+        )
+        if r.status_code == 409:
+            return False, r.json().get("checked_out_by")
+        r.raise_for_status()
+        return True, None
+    except Exception as e:
+        log(f"WARNING: Could not register checkout for {step_name}: {e}")
+        return True, None  # fail open -- don't block opening the file over a network hiccup
+
+
+def checkin_step(asset_id, step_name, login_name):
+    try:
+        requests.post(
+            f"{SHOT_TRACKER_URL}/classes/api/launcher/asset-steps/checkin",
+            json={"asset_id": asset_id, "step_name": step_name, "login_name": login_name},
+            timeout=10
+        )
+    except Exception as e:
+        log(f"WARNING: Could not check in {step_name}: {e}")
+
+
+def heartbeat_step(asset_id, step_name, login_name):
+    try:
+        requests.post(
+            f"{SHOT_TRACKER_URL}/classes/api/launcher/asset-steps/heartbeat",
+            json={"asset_id": asset_id, "step_name": step_name, "login_name": login_name},
+            timeout=10
+        )
+    except Exception as e:
+        log(f"WARNING: Could not send heartbeat for {step_name}: {e}")
+
+
+def register_checkout_hooks(asset_id, step_name, login_name):
+    """
+    Best-effort session hooks so the checkout releases when Maya quits and
+    stays alive (doesn't go stale) while the artist keeps working: a
+    quitApplication scriptJob checks the step back in, a SceneSaved one
+    heartbeats it. Only called for steps in a mutual-exclusion group (see
+    MUTUALLY_EXCLUSIVE_STEP_GROUPS) -- every other step's checkout is
+    harmless to leave un-released since nothing ever checks it.
+    """
+    try:
+        cmds.scriptJob(
+            event=["quitApplication", lambda: checkin_step(asset_id, step_name, login_name)],
+            protected=True
+        )
+        cmds.scriptJob(
+            event=["SceneSaved", lambda: heartbeat_step(asset_id, step_name, login_name)],
+            protected=True
+        )
+    except Exception as e:
+        log(f"WARNING: Could not register checkout scriptJobs for {step_name}: {e}")
 
 
 # ── Naming / path helpers ─────────────────────────────────────
@@ -324,6 +446,15 @@ def run(login_name=None, asset_id=None):
                 cmds.warning(f"'{requested_step_name}' isn't a step this tool knows how to open.")
                 return False
 
+            # Coordinator override is allowed to open past the Tex/Rig
+            # mutual-exclusion checkout too (force=True), same as it's
+            # already allowed to open past the normal lock/approval gate --
+            # still registers the checkout (so status reflects reality) and
+            # the release hooks, just never blocked by it.
+            if _sibling_group(category, step_code):
+                checkout_step(asset_id, requested_step_name, login_name, force=True)
+                register_checkout_hooks(asset_id, requested_step_name, login_name)
+
             version, path = find_latest_version_for_step(asset_dir, asset_name, step_code)
 
             if path:
@@ -354,15 +485,30 @@ def run(login_name=None, asset_id=None):
             return True
 
         steps = fetch_asset_steps_status(asset_id)
-        current_step = resolve_current_step(steps) if steps is not None else None
+        candidates = resolve_current_step_candidates(steps, category) if steps is not None else []
 
-        if current_step is None:
+        if not candidates:
             if steps is None:
                 log("ERROR: Could not fetch asset step status; nothing to open")
             else:
                 log(f"ERROR: '{category}' has no Modeling/Texture-Surface/Rigging step to open in Maya (steps: {[s.get('name') for s in steps]})")
             cmds.warning("This asset's category has no Modeling/Texture/Rigging step to open in Maya.")
             return False
+
+        current_step = pick_open_target(candidates, login_name)
+        if current_step is None:
+            blockers = sorted({s["checked_out_by"] for s in candidates if s.get("checked_out_by")})
+            log(f"ERROR: {[c['name'] for c in candidates]} are all currently open by someone else ({', '.join(blockers)})")
+            cmds.warning(f"Someone else currently has this asset's {'/'.join(c['name'] for c in candidates)} open — try again once they're done.")
+            return False
+
+        if _sibling_group(category, current_step.get("short_code")):
+            checked_out, blocked_by = checkout_step(asset_id, current_step["name"], login_name)
+            if not checked_out:
+                log(f"ERROR: {current_step['name']} is currently open by {blocked_by}")
+                cmds.warning(f"{current_step['name']} is currently open by {blocked_by} — try again once they're done.")
+                return False
+            register_checkout_hooks(asset_id, current_step["name"], login_name)
 
         existing_version, existing_path = find_latest_asset_version(asset_dir, asset_name)
 

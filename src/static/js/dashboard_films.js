@@ -563,6 +563,17 @@ function renderUserAssets() {
             const openUri = isProxy
               ? `shottracker://open?action=asset&asset_id=${a.asset_id}&step_name=Proxy&login_name=${loginParam}`
               : `shottracker://open?action=asset&asset_id=${a.asset_id}&login_name=${loginParam}`;
+
+            // Unlocked/eligible but a mutual-exclusion sibling (e.g. Texture-
+            // Surface, for a Rigging row) is currently open in Maya by
+            // someone else -- surfaces that here so the artist finds out
+            // BEFORE launching Maya, instead of only from Assets.py's
+            // warning once it's already open. See checkout_blocked_by,
+            // computed by _resolve_checkout_blockers() in dashboard_routes.py.
+            if (canOpen && a.checkout_blocked_by) {
+              return `<span class="bg-gray-700 text-gray-400 px-3 py-1 rounded text-sm inline-block cursor-not-allowed" title="${a.step_name} is currently open by ${a.checkout_blocked_by} — try again once they're done">🔒 OPEN</span>`;
+            }
+
             return canOpen
               ? `<a href="${openUri}" class="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm inline-block">OPEN</a>`
               : `<span class="bg-gray-700 text-gray-400 px-3 py-1 rounded text-sm inline-block cursor-not-allowed" title="Not ready yet — the prior step isn't done">🔒 OPEN</span>`;

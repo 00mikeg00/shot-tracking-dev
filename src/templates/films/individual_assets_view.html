@@ -128,6 +128,11 @@
                             title="Open a specific step's file in Maya, even if it's already approved/locked">
                             🎬 Open
                         </button>
+                        <button type="button" class="bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded text-xs"
+                            onclick="releaseAssetCheckout({{ asset.id }}, '{{ asset.name }}')"
+                            title="Release a stuck Tex/Rig checkout (e.g. Maya crashed without checking in) so the other step can be opened again">
+                            🔓 Release Lock
+                        </button>
                     </div>
 
                     <!-- Right: Steps -->
@@ -355,7 +360,7 @@
     // approved -- the OPEN button on the student's own dashboard only ever
     // opens the current unlocked step, deliberately, so this is the
     // separate escape hatch for going back into an already-approved one.
-    function openAssetStepPicker(assetId, assetName, assetCategory) {
+    async function openAssetStepPicker(assetId, assetName, assetCategory) {
         const stepNames = CATEGORY_STEP_OPTIONS[assetCategory] || ["Modeling", "Texture/Surface"];
 
         if (stepNames.length === 0) {
@@ -367,10 +372,30 @@
             return;
         }
 
-        const inputOptions = {};
-        stepNames.forEach(name => { inputOptions[name] = name; });
+        // Best-effort: annotate Texture-Surface/Rigging-style steps with
+        // who currently has them open (step_checkouts), so the coordinator
+        // can see they're about to force-open past someone else's session
+        // -- see checkout_step(force=True) in deploy/Assets.py, which lets
+        // this picker open past the checkout either way.
+        let checkedOutBy = {};
+        try {
+            const res = await fetch(`/classes/api/launcher/asset-steps/status?asset_id=${assetId}`);
+            if (res.ok) {
+                const data = await res.json();
+                (data.steps || []).forEach(s => {
+                    if (s.checked_out_by) checkedOutBy[s.name] = s.checked_out_by;
+                });
+            }
+        } catch (e) {
+            // Non-fatal -- picker still works without the annotation.
+        }
 
-        Swal.fire({
+        const inputOptions = {};
+        stepNames.forEach(name => {
+            inputOptions[name] = checkedOutBy[name] ? `${name} — 🔒 open by ${checkedOutBy[name]}` : name;
+        });
+
+        const result = await Swal.fire({
             title: `Open "${assetName}" — which step?`,
             input: "select",
             inputOptions,
@@ -378,14 +403,91 @@
             showCancelButton: true,
             confirmButtonText: "Open in Maya",
             inputValidator: (value) => !value && "Please select a step"
-        }).then((result) => {
-            if (!result.isConfirmed || !result.value) return;
-            const loginName = window.currentLoginName || "";
-            window.location.href =
-                `shottracker://open?action=asset&asset_id=${assetId}` +
-                `&step_name=${encodeURIComponent(result.value)}` +
-                `&login_name=${encodeURIComponent(loginName)}`;
         });
+        if (!result.isConfirmed || !result.value) return;
+
+        if (checkedOutBy[result.value]) {
+            const confirmForce = await Swal.fire({
+                icon: "warning",
+                title: "Currently open elsewhere",
+                text: `${result.value} is currently open by ${checkedOutBy[result.value]}. Open it anyway?`,
+                showCancelButton: true,
+                confirmButtonText: "Open anyway",
+                confirmButtonColor: "#d33"
+            });
+            if (!confirmForce.isConfirmed) return;
+        }
+
+        const loginName = window.currentLoginName || "";
+        window.location.href =
+            `shottracker://open?action=asset&asset_id=${assetId}` +
+            `&step_name=${encodeURIComponent(result.value)}` +
+            `&login_name=${encodeURIComponent(loginName)}`;
+    }
+
+    // Manual escape hatch for a stuck checkout (step_checkouts) -- normally
+    // released when Maya quits cleanly, or auto-expires after the stale
+    // timeout (see STALE_CHECKOUT_HOURS in launcher_routes.py), but a
+    // coordinator shouldn't have to wait hours if Maya crashed. Reuses the
+    // same /asset-steps/checkin endpoint Assets.py's quitApplication hook
+    // calls -- it doesn't check who's releasing it, same trust boundary as
+    // the rest of the launcher API (see launcher_routes.py's NOTE comment).
+    async function releaseAssetCheckout(assetId, assetName) {
+        let steps = [];
+        try {
+            const res = await fetch(`/classes/api/launcher/asset-steps/status?asset_id=${assetId}`);
+            if (!res.ok) throw new Error("status fetch failed");
+            const data = await res.json();
+            steps = (data.steps || []).filter(s => s.checked_out_by);
+        } catch (e) {
+            Swal.fire({ icon: "error", title: "Couldn't check status", text: "Try again in a moment." });
+            return;
+        }
+
+        if (steps.length === 0) {
+            Swal.fire({ icon: "info", title: "Nothing to release", text: `No step of "${assetName}" is currently checked out.` });
+            return;
+        }
+
+        let stepName = steps[0].name;
+        if (steps.length > 1) {
+            const inputOptions = {};
+            steps.forEach(s => { inputOptions[s.name] = `${s.name} — open by ${s.checked_out_by}`; });
+            const picked = await Swal.fire({
+                title: `Release which step's lock on "${assetName}"?`,
+                input: "select",
+                inputOptions,
+                showCancelButton: true,
+                confirmButtonText: "Release",
+                inputValidator: (value) => !value && "Please select a step"
+            });
+            if (!picked.isConfirmed || !picked.value) return;
+            stepName = picked.value;
+        }
+
+        const heldBy = steps.find(s => s.name === stepName)?.checked_out_by;
+        const confirmed = await Swal.fire({
+            icon: "warning",
+            title: "Release checkout?",
+            text: `${stepName} is currently open by ${heldBy}. Releasing it lets someone else open the other step, but doesn't close their Maya session -- only do this if you know it's stuck (e.g. Maya crashed).`,
+            showCancelButton: true,
+            confirmButtonText: "Release",
+            confirmButtonColor: "#d33"
+        });
+        if (!confirmed.isConfirmed) return;
+
+        const loginName = window.currentLoginName || "";
+        try {
+            const res = await fetch("/classes/api/launcher/asset-steps/checkin", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ asset_id: assetId, step_name: stepName, login_name: loginName })
+            });
+            if (!res.ok) throw new Error("checkin failed");
+            Swal.fire({ icon: "success", title: "Released", text: `${stepName} is no longer marked as open.` });
+        } catch (e) {
+            Swal.fire({ icon: "error", title: "Couldn't release", text: "Try again in a moment." });
+        }
     }
 
     function openEditAssetModal(assetId, name, dueDate) {
