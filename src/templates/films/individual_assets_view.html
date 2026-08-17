@@ -124,7 +124,7 @@
                             🖼️ View Designs
                         </button>
                         <button type="button" class="bg-green-700 hover:bg-green-800 text-white px-2 py-1 rounded text-xs"
-                            onclick="openAssetStepPicker({{ asset.id }}, '{{ asset.name }}')"
+                            onclick="openAssetStepPicker({{ asset.id }}, '{{ asset.name }}', '{{ asset.category }}')"
                             title="Open a specific step's file in Maya, even if it's already approved/locked">
                             🎬 Open
                         </button>
@@ -338,21 +338,42 @@
 <script>
     window.currentLoginName = {{ session.get('login_name', '') | tojson }};
 
+    // Maya-openable steps per asset category -- excludes Design/FB-*/Shot
+    // Ready steps, which have no Maya scene to open. Mirrors the category
+    // timelines in default_timelines.json.
+    const CATEGORY_STEP_OPTIONS = {
+        "Sets": ["Modeling", "Texture/Surface"],
+        "BGs": ["Modeling", "Texture/Surface"],
+        "Character/Rigs": ["Proxy", "Modeling", "Texture/Surface", "Rigging"],
+        "Props - 3D": ["Modeling", "Texture/Surface"],
+        "Props - 2D": [],
+        "Light Rigs": ["Rig Creation"]
+    };
+
     // Coordinator override-open: bypasses the normal locked-step gate so a
     // rig/set/etc can be reopened and fixed even after its step is
     // approved -- the OPEN button on the student's own dashboard only ever
     // opens the current unlocked step, deliberately, so this is the
     // separate escape hatch for going back into an already-approved one.
-    function openAssetStepPicker(assetId, assetName) {
+    function openAssetStepPicker(assetId, assetName, assetCategory) {
+        const stepNames = CATEGORY_STEP_OPTIONS[assetCategory] || ["Modeling", "Texture/Surface"];
+
+        if (stepNames.length === 0) {
+            Swal.fire({
+                icon: "info",
+                title: "No Maya steps",
+                text: `"${assetName}" (${assetCategory}) has no Maya file to open.`
+            });
+            return;
+        }
+
+        const inputOptions = {};
+        stepNames.forEach(name => { inputOptions[name] = name; });
+
         Swal.fire({
             title: `Open "${assetName}" — which step?`,
             input: "select",
-            inputOptions: {
-                "Proxy": "Proxy",
-                "Modeling": "Modeling",
-                "Texture/Surface": "Texture/Surface",
-                "Rigging": "Rigging"
-            },
+            inputOptions,
             inputPlaceholder: "Select a step",
             showCancelButton: true,
             confirmButtonText: "Open in Maya",
