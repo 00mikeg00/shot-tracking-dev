@@ -49,7 +49,8 @@
                 {% for class_item in class_group %}
                 <tr class="border-b hover:bg-gray-700">
                 <td class="p-3">
-                  <input type="checkbox" name="class_ids" value="{{ class_item['id'] }}">
+                  <input type="checkbox" name="class_ids" value="{{ class_item['id'] }}"
+                    {{ 'disabled title="Unlock this class before deleting it."'|safe if class_item['locked'] else '' }}>
                 </td>
                 <td class="p-3 w-1/2 whitespace-normal break-words max-w-xs">
                   <a href="{{ url_for('assignments.view_assignments', class_id=class_item['id']) }}"
@@ -59,7 +60,7 @@
                   </a>
                 </td>
                 <td class="p-3">{{ class_item['instructor_name'] or '—' }}</td>
-                
+
                 <td class="p-3 flex space-x-2">
                   <a href="{{ url_for('classes.edit_class', class_id=class_item['id']) }}"
                     class="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1 rounded-lg">Edit</a>
@@ -67,7 +68,14 @@
                     data-class-id="{{ class_item['id'] }}" data-class-name="{{ class_item['class_name'] }}">
                     Config
                   </button>
-                  <button type="button" class="bg-red-800 hover:bg-red-600 text-white px-3 py-1 rounded-lg"
+                  <button type="button" id="lock-btn-{{ class_item['id'] }}"
+                    class="{{ 'bg-gray-500 hover:bg-gray-600' if class_item['locked'] else 'bg-slate-600 hover:bg-slate-700' }} text-white px-3 py-1 rounded-lg"
+                    onclick="toggleLockClass({{ class_item['id'] }}, {{ 'true' if class_item['locked'] else 'false' }})">
+                    {{ '🔒 Locked' if class_item['locked'] else '🔓 Lock' }}
+                  </button>
+                  <button type="button" id="delete-btn-{{ class_item['id'] }}"
+                    class="bg-red-800 hover:bg-red-600 text-white px-3 py-1 rounded-lg{{ ' opacity-50 cursor-not-allowed' if class_item['locked'] else '' }}"
+                    {{ 'disabled title="Unlock this class before deleting it."'|safe if class_item['locked'] else '' }}
                     onclick="confirmDeleteClass({{ class_item['id'] }})">
                     Delete
                   </button>
@@ -165,7 +173,43 @@
         checkboxes.forEach(checkbox => checkbox.checked = selectAllCheckbox.checked);
     }
 
+  function toggleLockClass(classId, isLocked) {
+    const action = isLocked ? 'Unlock' : 'Lock';
+    Swal.fire({
+      icon: 'question',
+      title: `${action} this class?`,
+      text: isLocked
+        ? 'Unlocking will allow this class to be deleted.'
+        : 'Locking prevents this class from being deleted until it is unlocked.',
+      showCancelButton: true,
+      confirmButtonText: action,
+      cancelButtonText: 'Cancel',
+      reverseButtons: true
+    }).then((result) => {
+      if (!result.isConfirmed) return;
+
+      fetch(`/classes/toggle_lock/${classId}`, { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            location.reload();
+          } else {
+            Swal.fire({ icon: 'error', title: 'Error', text: data.message || 'Could not update lock status.' });
+          }
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          Swal.fire({ icon: 'error', title: 'Error', text: 'Something went wrong.' });
+        });
+    });
+  }
+
   function confirmDeleteClass(classId) {
+    const deleteBtn = document.getElementById(`delete-btn-${classId}`);
+    if (deleteBtn && deleteBtn.disabled) {
+      Swal.fire({ icon: 'warning', title: 'Class Locked', text: 'Unlock this class before deleting it.' });
+      return;
+    }
     Swal.fire({
       icon: 'warning',
       title: 'Delete Class?',

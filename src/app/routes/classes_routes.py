@@ -15,7 +15,8 @@ from app.models.classes import (
     validate_class_exists, validate_class_number, get_class_folder_path,
     delete_classes, delete_class_by_id, create_class_folder_if_missing,copy_assignments_from_class,
     parse_class_form, bulk_delete_from_form, get_instructors_dropdown, get_semesters_dropdown,
-    filter_students_by_name, get_students_by_class_with_enrollment_marked, validate_student_action_payload, add_students_to_class, remove_students_from_class_db, add_students_to_class_and_assignments
+    filter_students_by_name, get_students_by_class_with_enrollment_marked, validate_student_action_payload, add_students_to_class, remove_students_from_class_db, add_students_to_class_and_assignments,
+    set_class_locked
 )
 from app.utils.utils import role_required
 from app.database.db import get_db
@@ -225,13 +226,7 @@ def delete_class(class_id):
 @role_required('classes', ['Instructor', 'Admin'])
 def bulk_delete_classes():
     try:
-        if not bulk_delete_from_form(request.form):
-            session['swal_data'] = {
-                "icon": "warning",
-                "title": "No Selection",
-                "text": "No classes were selected for deletion."
-            }
-            return redirect(url_for('classes.view_classes'))
+        deleted_count, locked_count = bulk_delete_from_form(request.form)
     except Exception as e:
         session['swal_data'] = {
             "icon": "error",
@@ -240,12 +235,47 @@ def bulk_delete_classes():
         }
         return redirect(url_for('classes.view_classes'))
 
-    session['swal_data'] = {
-        "icon": "success",
-        "title": "Classes Deleted",
-        "text": "Selected classes were deleted successfully."
-    }
+    if deleted_count == 0 and locked_count == 0:
+        session['swal_data'] = {
+            "icon": "warning",
+            "title": "No Selection",
+            "text": "No classes were selected for deletion."
+        }
+    elif deleted_count == 0:
+        session['swal_data'] = {
+            "icon": "warning",
+            "title": "Classes Locked",
+            "text": "No classes were deleted -- all selected classes are locked. Unlock them first."
+        }
+    elif locked_count:
+        session['swal_data'] = {
+            "icon": "warning",
+            "title": "Some Classes Locked",
+            "text": f"Deleted {deleted_count} class(es). {locked_count} locked class(es) were skipped."
+        }
+    else:
+        session['swal_data'] = {
+            "icon": "success",
+            "title": "Classes Deleted",
+            "text": "Selected classes were deleted successfully."
+        }
     return redirect(url_for('classes.view_classes'))
+
+@classes_bp.route('/toggle_lock/<int:class_id>', methods=['POST'])
+@role_required('classes', ['Instructor', 'Admin'])
+def toggle_class_lock(class_id):
+    """Lock/unlock a class to guard it against accidental deletion."""
+    class_details = validate_class_exists(class_id)
+    if not class_details:
+        return jsonify({"success": False, "message": "Class not found."}), 404
+
+    locked = not class_details.get('locked')
+    try:
+        set_class_locked(class_id, locked)
+        return jsonify({"success": True, "locked": locked})
+    except Exception as e:
+        print(f"Toggle lock error: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
 
 @classes_bp.route('/get_all_classes', methods=['GET'], endpoint='get_all_classes_route')
 @role_required('classes', ['Instructor', 'Admin'])

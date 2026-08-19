@@ -121,7 +121,7 @@ def get_class_by_id(class_id):
 def get_all_classes_dict():
     db = get_db()
     rows = db.execute("""
-        SELECT c.id, c.class_name, c.code, c.class_number,
+        SELECT c.id, c.class_name, c.code, c.class_number, c.locked,
                s.year, s.term AS semester_name,
                u.name AS instructor_name
         FROM classes c
@@ -146,7 +146,8 @@ def get_all_classes_dict():
             'class_number': row['class_number'],
             'year': row['year'],
             'semester': row['semester_name'],
-            'instructor_name': row['instructor_name']
+            'instructor_name': row['instructor_name'],
+            'locked': bool(row['locked'])
         })
 
     return grouped
@@ -174,6 +175,18 @@ def validate_class_exists(class_id):
         return None
     return class_details
 
+def is_class_locked(class_id):
+    conn = get_db()
+    row = conn.execute("SELECT locked FROM classes WHERE id = ?", (class_id,)).fetchone()
+    return bool(row and row['locked'])
+
+
+def set_class_locked(class_id, locked):
+    conn = get_db()
+    conn.execute("UPDATE classes SET locked = ? WHERE id = ?", (1 if locked else 0, class_id))
+    conn.commit()
+
+
 def validate_class_number(class_number):
     if not class_number.isdigit():
         raise ValueError(f"Invalid class number: {class_number} (must be all digits)")
@@ -193,6 +206,8 @@ def delete_classes(class_ids):
 def delete_class_by_id(class_id):
     db = get_db()
     db.execute("PRAGMA foreign_keys = ON")
+    if is_class_locked(class_id):
+        raise RuntimeError("This class is locked and cannot be deleted. Unlock it first.")
     try:
         # Remove grade history (must go before individual_assignments)
         db.execute("""
@@ -287,13 +302,18 @@ def parse_class_form(form):
 
 
 def bulk_delete_from_form(form):
+    """Deletes the selected, unlocked classes. Returns (deleted_count, locked_count)."""
     class_ids = form.getlist('class_ids')
     if not class_ids:
-        flash("No classes selected for deletion.", "warning")
-        return False
-    delete_classes(class_ids)
-    flash("Selected classes deleted successfully!", "success")
-    return True
+        return 0, 0
+
+    locked_ids = [cid for cid in class_ids if is_class_locked(cid)]
+    unlocked_ids = [cid for cid in class_ids if cid not in locked_ids]
+
+    if unlocked_ids:
+        delete_classes(unlocked_ids)
+
+    return len(unlocked_ids), len(locked_ids)
 
 # ----------------------------------------------------------------------------------
 # DROPDOWN DATA
