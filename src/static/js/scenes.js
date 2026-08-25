@@ -205,3 +205,96 @@ function markSceneLayoutDone(button) {
       });
   });
 }
+
+function openDavinciExportDialog(sceneId) {
+  Swal.fire({
+    title: 'Export to DaVinci',
+    html: `
+      <div class="flex items-center justify-between mb-1">
+        <label for="davinci-step-select" class="block text-sm text-left">Step to export</label>
+        <button type="button" id="davinci-help-btn" title="How do I import this into DaVinci?"
+          class="text-xs bg-gray-600 hover:bg-gray-500 text-white rounded-full w-5 h-5 leading-5 text-center">
+          ?
+        </button>
+      </div>
+      <select id="davinci-step-select" class="swal2-select" style="display: block; width: 100%;">
+        <option value="SB">Storyboards</option>
+        <option value="LAY" selected>Layout</option>
+        <option value="BL">Blocking</option>
+        <option value="ANIM">Animation</option>
+        <option value="LGT">Lighting</option>
+      </select>
+    `,
+    showCancelButton: true,
+    confirmButtonText: 'Export',
+    cancelButtonText: 'Cancel',
+    didOpen: () => {
+      document.getElementById('davinci-help-btn').addEventListener('click', () => {
+        openDavinciHelpDialog(sceneId);
+      });
+    },
+    preConfirm: () => document.getElementById('davinci-step-select').value
+  }).then((result) => {
+    if (!result.isConfirmed) return;
+    runDavinciExport(sceneId, result.value);
+  });
+}
+
+function openDavinciHelpDialog(sceneId) {
+  Swal.fire({
+    title: 'Importing into DaVinci Resolve',
+    html: `
+      <ol class="text-left text-sm space-y-2 list-decimal list-inside">
+        <li>Open DaVinci Resolve and open (or create) the project for this film.</li>
+        <li>Go to the <b>Media</b> page. In <b>Media Storage</b>, browse to the export's
+          <code>bin</code> folder (shown after export completes) and drag it into the
+          <b>Media Pool</b> so all the shot clips are loaded in.</li>
+        <li>Switch to the <b>Edit</b> page, then
+          <b>File &gt; Import &gt; Timeline &gt; Import AAF, EDL, XML...</b> and select the
+          <code>.edl</code> file (shown after export completes, next to the bin folder).</li>
+        <li>When prompted for source clips, choose <b>Automatically import source clips into
+          media pool</b> and point it at the bin folder you loaded in step 2 -- Resolve links
+          each shot by filename.</li>
+        <li>Resolve builds a new timeline with every shot back-to-back in shot order, ready to
+          scrub through on the Edit page.</li>
+      </ol>
+    `,
+    confirmButtonText: 'Back',
+    width: 600
+  }).then(() => {
+    openDavinciExportDialog(sceneId);
+  });
+}
+
+function runDavinciExport(sceneId, step) {
+  Swal.fire({
+    title: 'Exporting...',
+    text: 'Copying shots and building the EDL. This can take a moment.',
+    allowOutsideClick: false,
+    didOpen: () => Swal.showLoading()
+  });
+
+  fetch(`/films/scenes/${sceneId}/export-davinci`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ step })
+  })
+    .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+    .then(({ ok, data }) => {
+      if (!ok) {
+        Swal.fire('Error', data.error || 'Export failed.', 'error');
+        return;
+      }
+      const skippedNote = data.skipped && data.skipped.length
+        ? `<br><br>Skipped shots (no ${step} file found): ${data.skipped.join(', ')}`
+        : '';
+      Swal.fire({
+        title: 'Export complete',
+        html: `${data.message}<br><br>Bin: ${data.bin_dir}<br>EDL: ${data.edl_path}${skippedNote}`,
+        icon: 'success'
+      });
+    })
+    .catch(() => {
+      Swal.fire('Error', 'Could not reach Shot Tracker.', 'error');
+    });
+}

@@ -1,6 +1,8 @@
 ﻿import os
 import json
 import re
+import glob
+import shutil
 import logging
 import subprocess
 import datetime
@@ -1019,6 +1021,186 @@ def delete_scene_route(scene_id):
 
     print(f"[OK] Deleted Scene and Related Data for scene_id={scene_id}")
     return redirect(url_for("films.view_scenes", film_id=film_id))
+
+
+def _resolve_latest_shot_file(base_scene_dir, film_name, scene_number, shot_num, step):
+    """
+    Same lookup as get_scene_shots() in review_routes.py: {film}_{scene}_{shot}_{STEP}_*.webm
+    under either \\<scene>\\<shot>\\ or \\<scene>\\<scene>_<shot>\\, picking the highest _v##
+    (newest mtime breaks ties).
+    """
+    shot_dir_1 = os.path.join(base_scene_dir, shot_num)
+    shot_dir_2 = os.path.join(base_scene_dir, f"{scene_number}_{shot_num}")
+    pattern_name = f"{film_name}_{scene_number}_{shot_num}_{step}_*.webm"
+
+    best_path = None
+    best_v = -1
+    best_mtime = 0.0
+    for d in (shot_dir_1, shot_dir_2):
+        if not os.path.isdir(d):
+            continue
+        for fp in glob.glob(os.path.join(d, pattern_name)):
+            bn = os.path.basename(fp)
+            m = re.search(r"_v(\d+)", bn, re.IGNORECASE)
+            v = int(m.group(1)) if m else -1
+            mtime = os.path.getmtime(fp)
+            if (v, mtime) > (best_v, best_mtime):
+                best_v, best_mtime, best_path = v, mtime, fp
+    return best_path
+
+
+def _probe_duration_and_fps(path):
+    """
+    Reads clip duration (seconds) and video fps via ffprobe. Returns (None, None)
+    if the file can't be read -- callers treat that shot as skipped rather than
+    guessing a duration, since a wrong duration would silently desync every
+    later shot's record timecode in the EDL.
+    """
+    ffprobe = r"C:\ffmpeg\bin\ffprobe.exe"
+    try:
+        result = subprocess.run(
+            [ffprobe, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", path],
+            capture_output=True, text=True, timeout=30
+        )
+        data = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None, None
+
+    duration = None
+    fmt_duration = data.get("format", {}).get("duration")
+    if fmt_duration:
+        duration = float(fmt_duration)
+
+    fps = None
+    for stream in data.get("streams", []):
+        if stream.get("codec_type") == "video":
+            if duration is None and stream.get("duration"):
+                duration = float(stream["duration"])
+            rate = stream.get("r_frame_rate")
+            if rate:
+                num, _, den = rate.partition("/")
+                try:
+                    den = float(den) if den else 1.0
+                    if den:
+                        fps = round(float(num) / den)
+                except ValueError:
+                    pass
+            break
+
+    return duration, fps
+
+
+def _frames_to_timecode(frame_count, fps):
+    fps = max(1, int(round(fps)))
+    total_seconds, frames = divmod(max(0, frame_count), fps)
+    hours, rem = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}:{frames:02d}"
+
+
+def _build_edl(title, clips, fps):
+    """
+    CMX3600 EDL, shots placed back-to-back with straight cuts. Reel "AX"
+    (no reel) plus a "* FROM CLIP NAME" comment is the standard way to let
+    DaVinci auto-relink each event to the matching file in the imported bin.
+    """
+    lines = [f"TITLE: {title}", "FCM: NON-DROP FRAME", ""]
+    record_frame = 0
+    for i, clip in enumerate(clips, start=1):
+        src_in = _frames_to_timecode(0, fps)
+        src_out = _frames_to_timecode(clip["frames"], fps)
+        rec_in = _frames_to_timecode(record_frame, fps)
+        rec_out = _frames_to_timecode(record_frame + clip["frames"], fps)
+        lines.append(f"{i:03d}  AX       V     C        {src_in} {src_out} {rec_in} {rec_out}")
+        lines.append(f"* FROM CLIP NAME: {clip['filename']}")
+        lines.append("")
+        record_frame += clip["frames"]
+    return "\n".join(lines)
+
+
+@films_bp.route("/scenes/<int:scene_id>/export-davinci", methods=["POST"])
+@login_required
+def export_scene_davinci(scene_id):
+    """
+    Copies each shot's latest video for the given step into a bin folder next
+    to the shot files, and writes a CMX3600 EDL that lays them back-to-back
+    in shot order -- so the coordinator can import both straight into DaVinci
+    without hand-assembling a timeline.
+    """
+    payload = request.get_json(silent=True) or {}
+    step = (payload.get("step") or request.form.get("step") or "").strip().upper()
+    if not step:
+        return jsonify({"error": "step is required"}), 400
+
+    db = get_db()
+    row = db.execute("""
+        SELECT s.scene_number, f.name AS film_name
+        FROM scenes s
+        JOIN films f ON f.id = s.film_id
+        WHERE s.id = ?
+    """, (scene_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Scene not found"}), 404
+
+    scene_number = str(row["scene_number"]).zfill(3)
+    film_name = row["film_name"]
+
+    shots = db.execute(
+        "SELECT shot_number FROM shots WHERE scene_id = ? ORDER BY shot_number", (scene_id,)
+    ).fetchall()
+    if not shots:
+        return jsonify({"error": "No shots in this scene"}), 404
+
+    base_scene_dir = os.path.join(r"\\GAAAP1PRD01W\Films", film_name, scene_number)
+    export_dir = os.path.join(base_scene_dir, "davinci_export", step)
+    bin_dir = os.path.join(export_dir, "bin")
+    os.makedirs(bin_dir, exist_ok=True)
+
+    copied = []
+    skipped = []
+    for shot_row in shots:
+        shot_num = str(shot_row["shot_number"]).zfill(3)
+        src_path = _resolve_latest_shot_file(base_scene_dir, film_name, scene_number, shot_num, step)
+        if not src_path:
+            skipped.append(shot_num)
+            continue
+        dest_path = os.path.join(bin_dir, os.path.basename(src_path))
+        try:
+            shutil.copy2(src_path, dest_path)
+        except OSError:
+            skipped.append(shot_num)
+            continue
+        copied.append({"shot_number": shot_num, "filename": os.path.basename(src_path), "path": dest_path})
+
+    if not copied:
+        return jsonify({"error": f"No {step} files found for any shot in this scene", "skipped": skipped}), 404
+
+    fps = 24  # fallback if no clip's fps could be probed
+    clips = []
+    for entry in copied:
+        duration, clip_fps = _probe_duration_and_fps(entry["path"])
+        if duration is None:
+            skipped.append(entry["shot_number"])
+            continue
+        if clip_fps and not clips:
+            fps = clip_fps  # project fps = first successfully-probed clip's fps
+        clips.append({"filename": entry["filename"], "frames": max(1, round(duration * fps))})
+
+    if not clips:
+        return jsonify({"error": "Copied files but ffprobe couldn't read any clip", "skipped": skipped}), 500
+
+    edl_title = f"{film_name}_{scene_number}_{step}"
+    edl_path = os.path.join(export_dir, f"{edl_title}.edl")
+    with open(edl_path, "w", encoding="utf-8") as f:
+        f.write(_build_edl(edl_title, clips, fps))
+
+    return jsonify({
+        "message": f"Exported {len(clips)} of {len(shots)} shots to DaVinci bin + EDL.",
+        "bin_dir": bin_dir,
+        "edl_path": edl_path,
+        "skipped": skipped
+    })
+
 
 @films_bp.route("/<int:film_id>/scenes", methods=["GET"])
 def view_scenes(film_id):
