@@ -697,7 +697,14 @@
             <span class="chevron text-white">▾</span>
             <span class="text-white font-bold text-lg">${class_name}</span>
           </div>
-          ${gradeSummary ? `
+          <div class="flex items-center gap-6 text-sm">
+            <a href="shottracker://open?action=blank_scene&login_name=${encodeURIComponent(window.currentLoginName || "")}"
+               onclick="event.stopPropagation()"
+               class="bg-orange-700 hover:bg-orange-600 text-white px-3 py-1 rounded-lg text-xs font-semibold"
+               title="⚠️ Only use this if you want to open a BLANK Maya scene — this does not open any assignment or asset file.">
+              Blank Scene
+            </a>
+            ${gradeSummary ? `
             <div class="flex gap-6 text-sm">
               <span class="text-green-400 font-semibold">
                 Current Grade:
@@ -711,6 +718,7 @@
               </span>
             </div>
           ` : ""}
+          </div>
         </div>
         <div id="${classBodyId}" class="grid gap-3 p-4" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))"></div>
       `;

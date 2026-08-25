@@ -589,6 +589,10 @@ def main():
         _main_asset(params)
         return
 
+    if action == "blank_scene":
+        _main_blank_scene(params)
+        return
+
     class_id      = params.get("class_id")
     login_name    = params.get("login_name")
     assignment_id = params.get("assignment_id")
@@ -800,6 +804,20 @@ def _main_asset(params):
 
     launch_maya_asset(context["user"]["login_name"], context["asset_id"])
     log("Maya launch initiated (asset)")
+
+
+def _main_blank_scene(params):
+    """
+    shottracker://open?action=blank_scene&login_name=bariann
+
+    No context lookup, no session file, no Assignments/Assets -command --
+    just launches Maya with an empty scene. login_name is accepted only
+    for log-line parity with the other actions; it isn't used to launch.
+    """
+    login_name = params.get("login_name", "unknown")
+    log(f"action=blank_scene login_name={login_name}")
+    subprocess.Popen([MAYA_EXE])
+    log("Maya launch initiated (blank scene)")
 
 
 if __name__ == "__main__":
