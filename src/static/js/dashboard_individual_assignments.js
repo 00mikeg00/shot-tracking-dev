@@ -734,7 +734,18 @@
         return acc;
       }, {});
 
-      for (const [assignKey, steps] of Object.entries(groupedByAssignment)) {
+      // Order cards left-to-right by due date (earliest first). Assignments
+      // with no completion_date sort to the end.
+      const orderedAssignments = Object.entries(groupedByAssignment).sort(
+        ([keyA], [keyB]) => {
+          const norm = d => (d && d !== "null" && d !== "undefined") ? d : "9999-99-99";
+          const dateA = norm(keyA.split("||")[1]);
+          const dateB = norm(keyB.split("||")[1]);
+          return dateA.localeCompare(dateB);
+        }
+      );
+
+      for (const [assignKey, steps] of orderedAssignments) {
         const [assignment_name, completion_date, individual_assignment_id] = assignKey.split("||");
 
         // Find this assignment's grade breakdown from summary
