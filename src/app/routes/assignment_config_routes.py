@@ -245,7 +245,9 @@ def save_assignment_config_semester(semester_id):
         for assignment_name, cfg in assignments.items():
             raw_rigs = cfg.get("rigs", [])
             camera = bool(cfg.get("camera", False))
-            filename = cfg.get("filename", "")
+            # Blank filename breaks the dashboard version scan for the section;
+            # fall back to the assignment name (the key GAA Save uses too).
+            filename = (cfg.get("filename") or "").strip() or assignment_name
             frame_start = cfg.get("frame_start")
             frame_end = cfg.get("frame_end")
             frame_start = int(frame_start) if frame_start not in (None, "") else None
@@ -425,7 +427,10 @@ def save_assignment_config_class(class_id):
     for assignment_name, cfg in assignments.items():
         raw_rigs = cfg.get("rigs", [])
         camera = bool(cfg.get("camera", False))
-        filename = cfg.get("filename", "")
+        # An empty filename here silently breaks the dashboard's saved-version
+        # scan for the whole section -- default it to the assignment name, the
+        # same key GAA Save uses for scene filenames.
+        filename = (cfg.get("filename") or "").strip() or assignment_name
         frame_start = cfg.get("frame_start")
         frame_end = cfg.get("frame_end")
         frame_start = int(frame_start) if frame_start not in (None, "") else None

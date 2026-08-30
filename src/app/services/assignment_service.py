@@ -32,7 +32,8 @@ def find_latest_scene_version(semester_label, class_name, config_filename, displ
                 version = int(match.group(1))
                 if highest is None or version > highest:
                     highest = version
-    except OSError:
+    except OSError as e:
+        print(f"find_latest_scene_version: cannot read {save_dir}: {e}", flush=True)
         return None
 
     return highest
@@ -62,7 +63,8 @@ def find_latest_step_scene_version(semester_label, class_name, config_filename, 
 
     try:
         entries = os.listdir(save_dir)
-    except OSError:
+    except OSError as e:
+        print(f"find_latest_step_scene_version: cannot read {save_dir}: {e}", flush=True)
         return None, None
 
     # Only steps with a Blocking/Blocking Plus/Polish-style short code get
@@ -228,8 +230,15 @@ def get_user_assignments_by_semester(user_id, semester_id):
             (flow_id,)
         ).fetchall()
 
+        # A class section whose assignment_config_presets row was never
+        # populated leaves config_filename NULL/blank. GAA Save keys scene
+        # filenames on the assignment name in that case, so mirror that here
+        # rather than silently reporting no saved version (see build_save_dir
+        # / base_name in Assignments.py).
+        config_filename = row["config_filename"] or row["assignment_name"]
+
         current_file_step, latest_version = find_latest_step_scene_version(
-            row["semester_label"], row["class_name"], row["config_filename"], row["display_name"],
+            row["semester_label"], row["class_name"], config_filename, row["display_name"],
             step_rows, step_codes
         )
         if latest_version is None:
@@ -238,7 +247,7 @@ def get_user_assignments_by_semester(user_id, semester_id):
             # Blocking/Blocking Plus/Polish steps at all (e.g. "Basic
             # Assignment").
             latest_version = find_latest_scene_version(
-                row["semester_label"], row["class_name"], row["config_filename"], row["display_name"]
+                row["semester_label"], row["class_name"], config_filename, row["display_name"]
             )
 
         def get_status(step):
