@@ -2635,26 +2635,58 @@ def generate_canvas_csv_string(class_id):
     output.seek(0)
     return output.getvalue(), class_name
 
-@review_routes.route("/export_canvas_csv", methods=["GET"])
-def export_canvas_csv():
-    import csv, io
-    from flask import send_file, request
+POSE_PARENT_STEP_ID = 342
 
-    class_filter = request.args.get("class")
 
+def _canvas_norm(s):
+    """Normalize a column / assignment label for loose matching.
+
+    Lowercases, collapses whitespace, and strips spaces around dashes so that
+    'Jump - Grade-Planning' and 'Obstacle Course- Grade-Planning' compare equal
+    to the labels we build internally.
+    """
+    if not s:
+        return ""
+    s = re.sub(r"\s+", " ", str(s)).strip().lower()
+    s = re.sub(r"\s*-\s*", "-", s)
+    return s
+
+
+def _canvas_extract_numeric(status_string):
+    """Pull the numeric value from a grade string e.g. '3 - B' -> 3.0"""
+    if not status_string:
+        return 0.0
+    try:
+        return float(str(status_string).split(" - ")[0].strip())
+    except (ValueError, IndexError):
+        return 0.0
+
+
+def _fmt_num(val):
+    return str(int(val)) if float(val) == int(val) else str(val)
+
+
+def _build_canvas_grade_data(class_filter):
+    """Return (class_name, students, alias_map).
+
+    students: list of {name, login, aliases: {alias_norm: numeric}}
+    alias_map: {alias_norm: human_label} across the whole class (for diagnostics)
+
+    Pose assignments (parent_step_id == 342) collapse all of their grade steps
+    into a single value per assignment (Grade Pose 1 + Grade Pose 2, ...).
+    Non-pose assignments produce one value per 'Grade%' step.
+    """
     conn = get_db()
     cursor = conn.cursor()
 
-    # Pull all grade steps with assignment type info
     sql = """
-    SELECT 
+    SELECT
         c.class_name,
         u.name AS student_name,
         u.login_name AS login,
         a.id AS assignment_id,
         a.name AS assignment_name,
         a.parent_step_id,
-        a.max_points,
         s.name AS step_name,
         ias.current_status AS grade
     FROM individual_assignments ia
@@ -2666,98 +2698,204 @@ def export_canvas_csv():
     WHERE s.name LIKE 'Grade%'
     """
     params = ()
-
     if class_filter:
         sql += " AND c.class_name = ?"
         params = (class_filter,)
-
     sql += " ORDER BY u.name, a.name, s.name"
 
     rows = cursor.execute(sql, params).fetchall()
-    conn.close()
-
     if not rows:
-        return {"error": "No rows found", "class_filter": class_filter}
+        return None, [], {}
 
-    def extract_numeric(status_string):
-        """Pull numeric value from grade string e.g. '3 - B' → 3"""
-        if not status_string:
-            return 0
-        try:
-            return float(status_string.split(" - ")[0].strip())
-        except (ValueError, IndexError):
-            return 0
-
-    # POSE_STEP_ID = 342
-    POSE_PARENT_STEP_ID = 342
-
-    # Build assignment column list — pose assignments get ONE column, others get one per grade step
-    # Key: column label, Value: max_points for that column
-    assignment_columns = {}  # ordered dict of col_label → max_points
-
-    # First pass — determine columns
-    seen = set()
-    for r in rows:
-        if r["parent_step_id"] == POSE_PARENT_STEP_ID:
-            col = r["assignment_name"]  # e.g. "Pose #1" — single column
-            if col not in seen:
-                assignment_columns[col] = r["max_points"] or 8
-                seen.add(col)
-        else:
-            col = f"{r['assignment_name']} - {r['step_name']}"
-            if col not in seen:
-                assignment_columns[col] = r["max_points"] or 5
-                seen.add(col)
-
-    # Second pass — build per-student grade map
-    by_student = {}
     class_name = rows[0]["class_name"]
 
+    # How many grade steps does each non-pose assignment have? A single-step
+    # assignment can also be matched by its bare name ("Walk Entire Character").
+    step_counts = {}
     for r in rows:
-        name = r["student_name"]
-        if name not in by_student:
-            by_student[name] = {"login": r["login"], "grades": {}}
+        if r["parent_step_id"] != POSE_PARENT_STEP_ID:
+            step_counts.setdefault(r["assignment_name"], set()).add(r["step_name"])
 
-        numeric = extract_numeric(r["grade"])
+    by_student = {}
+    alias_map = {}
+
+    for r in rows:
+        key = r["login"] or r["student_name"]
+        st = by_student.setdefault(
+            key, {"name": r["student_name"], "login": r["login"], "aliases": {}}
+        )
+        numeric = _canvas_extract_numeric(r["grade"])
 
         if r["parent_step_id"] == POSE_PARENT_STEP_ID:
-            # Sum pose grades into single column
-            col = r["assignment_name"]
-            by_student[name]["grades"][col] = by_student[name]["grades"].get(col, 0) + numeric
+            labels = [r["assignment_name"]]  # e.g. "Pose #1" -- steps are summed
+            combine = True
         else:
-            col = f"{r['assignment_name']} - {r['step_name']}"
-            by_student[name]["grades"][col] = numeric
+            labels = [f"{r['assignment_name']} - {r['step_name']}"]
+            if len(step_counts.get(r["assignment_name"], ())) == 1:
+                labels.append(r["assignment_name"])
+            combine = False
 
-    # Write CSV
-    output = io.StringIO(newline="")
-    writer = csv.writer(output, lineterminator="\r\n")
+        for label in labels:
+            alias = _canvas_norm(label)
+            alias_map.setdefault(alias, label)
+            if combine:
+                st["aliases"][alias] = st["aliases"].get(alias, 0) + numeric
+            else:
+                st["aliases"][alias] = numeric
 
-    col_labels = list(assignment_columns.keys())
+    return class_name, list(by_student.values()), alias_map
 
-    # Header row
+
+def _match_canvas_column(col_norm, alias_map):
+    """Match a Canvas column (normalized, id suffix stripped) to an internal alias."""
+    if col_norm in alias_map:
+        return col_norm
+    # Prefix match: "pose #1 line of action" -> "pose #1"
+    for alias in alias_map:
+        if col_norm == alias or col_norm.startswith(alias + " "):
+            return alias
+    return None
+
+
+@review_routes.route("/export_canvas_csv", methods=["GET", "POST"])
+def export_canvas_csv():
+    """Export grades as a Canvas-importable CSV.
+
+    POST (preferred): multipart form with a `template` file -- the gradebook CSV
+    exported from Canvas. The response reuses that file's exact header and
+    Points Possible rows (so every column, including the `(id)` suffix Canvas
+    matches on, lines up) and only fills in the columns we can map to internal
+    grades. Unmatched assignment columns are reported in the
+    `X-Unmatched-Columns` response header.
+
+    GET (fallback): best-effort export with generated column names.
+    """
+    import csv, io
+
+    class_filter = request.args.get("class") or request.form.get("class")
+    template_file = request.files.get("template") if request.method == "POST" else None
+
+    class_name, students, alias_map = _build_canvas_grade_data(class_filter)
+    if class_name is None:
+        return jsonify({"error": "No grade rows found", "class_filter": class_filter}), 404
+
+    ID_COL_RE = re.compile(r"^(.*?)\s*\((\d+)\)\s*$")
+
+    def _send(text, unmatched=None, matched=None):
+        resp = make_response(("﻿" + text).encode("utf-8"))
+        resp.headers["Content-Type"] = "text/csv; charset=utf-8"
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", class_name).strip("_") or "grades"
+        resp.headers["Content-Disposition"] = f'attachment; filename="{safe}.csv"'
+        resp.headers["Access-Control-Expose-Headers"] = "X-Unmatched-Columns, X-Matched-Columns"
+        if unmatched is not None:
+            resp.headers["X-Unmatched-Columns"] = stdjson.dumps(unmatched)
+        if matched is not None:
+            resp.headers["X-Matched-Columns"] = stdjson.dumps(matched)
+        return resp
+
+    # ---- Template-aligned mode ---------------------------------------------
+    if template_file is not None:
+        raw = template_file.read().decode("utf-8-sig", errors="replace")
+        reader = list(csv.reader(io.StringIO(raw)))
+        if len(reader) < 2:
+            return jsonify({"error": "Template CSV has no header / Points Possible rows"}), 400
+
+        header = reader[0]
+        points_row = reader[1]
+
+        try:
+            login_idx = next(
+                i for i, h in enumerate(header)
+                if h.strip().lower() in ("sis login id", "sis user id", "login id")
+            )
+        except StopIteration:
+            login_idx = 3
+
+        col_targets = {}   # header index -> internal alias
+        unmatched = []
+        matched = []
+        for i, h in enumerate(header):
+            m = ID_COL_RE.match(h.strip())
+            if not m:
+                continue  # Student / ID / Section / read-only aggregate columns
+            alias = _match_canvas_column(_canvas_norm(m.group(1)), alias_map)
+            if alias:
+                col_targets[i] = alias
+                matched.append(h.strip())
+            else:
+                unmatched.append(h.strip())
+
+        def _name_key(s):
+            return " ".join(sorted(re.findall(r"[a-z]+", (s or "").lower())))
+
+        by_login = {}
+        by_name = {}
+        for s in students:
+            if s["login"]:
+                by_login[s["login"].strip().lower()] = s
+            if s["name"]:
+                by_name.setdefault(_name_key(s["name"]), s)
+
+        out = io.StringIO(newline="")
+        writer = csv.writer(out, lineterminator="\r\n")
+        writer.writerow(header)
+        writer.writerow(points_row)
+
+        seen = set()
+        for row in reader[2:]:
+            if not any(cell.strip() for cell in row):
+                continue
+            row = list(row) + [""] * (len(header) - len(row))
+            login = row[login_idx].strip().lower() if login_idx < len(row) else ""
+            student = by_login.get(login) or by_name.get(_name_key(row[0]))
+            if student:
+                seen.add(id(student))
+                for idx, alias in col_targets.items():
+                    if alias in student["aliases"]:
+                        row[idx] = _fmt_num(student["aliases"][alias])
+            writer.writerow(row[:len(header)])
+
+        # Students we have grades for who were not already in the template.
+        extras = 0
+        for student in students:
+            if id(student) in seen:
+                continue
+            extras += 1
+            row = [""] * len(header)
+            row[0] = student["name"] or ""
+            if login_idx < len(header):
+                row[login_idx] = student["login"] or ""
+            for idx, alias in col_targets.items():
+                if alias in student["aliases"]:
+                    row[idx] = _fmt_num(student["aliases"][alias])
+            writer.writerow(row)
+
+        if extras:
+            matched.append(f"(+{extras} student rows appended, not in template)")
+
+        return _send(out.getvalue(), unmatched=unmatched, matched=matched)
+
+    # ---- Fallback mode (no template) --------------------------------------
+    col_labels = []
+    seen = set()
+    for label in alias_map.values():
+        if label not in seen:
+            col_labels.append(label)
+            seen.add(label)
+
+    out = io.StringIO(newline="")
+    writer = csv.writer(out, lineterminator="\r\n")
     writer.writerow(["Student", "ID", "SIS User ID", "SIS Login ID", "Section", *col_labels])
-
-    # Points Possible row
-    writer.writerow([
-        "Points Possible", "", "", "", "",
-        *[str(int(assignment_columns[col])) for col in col_labels]
-    ])
-
-    # Student rows
-    for student, sdata in by_student.items():
-        row_out = [student, "", "", sdata["login"], class_name]
-        for col in col_labels:
-            val = sdata["grades"].get(col, 0)
-            row_out.append(str(int(val)) if val == int(val) else str(val))
+    writer.writerow(["    Points Possible", "", "", "", "", *["" for _ in col_labels]])
+    for s in students:
+        row_out = [s["name"], "", "", s["login"], class_name]
+        for label in col_labels:
+            val = s["aliases"].get(_canvas_norm(label))
+            row_out.append(_fmt_num(val) if val is not None else "")
         writer.writerow(row_out)
 
-    output.seek(0)
-    return send_file(
-        io.BytesIO(("\ufeff" + output.getvalue()).encode("utf-8")),
-        mimetype="text/csv",
-        as_attachment=True,
-        download_name=f"{class_name}.csv"
-    )
+    return _send(out.getvalue())
+
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TEMP_DIR = os.path.join(BASE_DIR, "temp_exports")

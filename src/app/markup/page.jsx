@@ -2864,29 +2864,88 @@ export default function MarkupTool() {
 
                 if (!className) return;
 
-                let url = "";
-                let filename = "";
+                const triggerDownload = (blob, filename) => {
+                  const downloadUrl = window.URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = downloadUrl;
+                  a.download = filename;
+                  a.click();
+                  window.URL.revokeObjectURL(downloadUrl);
+                };
 
                 if (className === "ALL") {
-                  url = `${API_BASE_URL}/review/export_all_grades_zip`;
-                  filename = "all_classes.zip";
-                } else {
-                  url = `${API_BASE_URL}/review/export_canvas_csv?class=${encodeURIComponent(className)}`;
-                  filename = `${className}.csv`;
+                  fetch(`${API_BASE_URL}/review/export_all_grades_zip`)
+                    .then((res) => res.blob())
+                    .then((blob) => triggerDownload(blob, "all_classes.zip"))
+                    .catch((err) => {
+                      console.error("❌ Failed to download:", err);
+                      Swal.fire("Error", "Could not download export.", "error");
+                    });
+                  return;
                 }
 
-                fetch(url)
-                  .then((res) => res.blob())
-                  .then((blob) => {
-                    const downloadUrl = window.URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = downloadUrl;
-                    a.download = filename;
-                    a.click();
+                // Ask for the Canvas gradebook CSV so the export lines up
+                // exactly (column names + assignment ids) for re-import.
+                const { value: file } = await Swal.fire({
+                  title: "Canvas gradebook CSV",
+                  html:
+                    "Upload the gradebook CSV you exported from Canvas for " +
+                    `<b>${className}</b>. Grades are written into a copy of that ` +
+                    "file so the columns line up for re-import.<br><br>" +
+                    "<i>Skip to get a plain export with generated column names.</i>",
+                  input: "file",
+                  inputAttributes: { accept: ".csv,text/csv" },
+                  showCancelButton: true,
+                  confirmButtonText: "Export",
+                  showDenyButton: true,
+                  denyButtonText: "Skip (plain export)",
+                });
+
+                const usePlain = file === false; // Deny button
+                if (file === undefined) return; // Cancel
+
+                const filename = `${className}.csv`;
+                let fetchPromise;
+                if (usePlain || !file) {
+                  fetchPromise = fetch(
+                    `${API_BASE_URL}/review/export_canvas_csv?class=${encodeURIComponent(className)}`
+                  );
+                } else {
+                  const fd = new FormData();
+                  fd.append("class", className);
+                  fd.append("template", file);
+                  fetchPromise = fetch(`${API_BASE_URL}/review/export_canvas_csv`, {
+                    method: "POST",
+                    body: fd,
+                  });
+                }
+
+                fetchPromise
+                  .then(async (res) => {
+                    if (!res.ok) {
+                      const msg = await res.json().catch(() => ({}));
+                      throw new Error(msg.error || `Export failed (${res.status})`);
+                    }
+                    let unmatched = [];
+                    try {
+                      unmatched = JSON.parse(res.headers.get("X-Unmatched-Columns") || "[]");
+                    } catch (e) {}
+                    const blob = await res.blob();
+                    triggerDownload(blob, filename);
+                    if (unmatched.length) {
+                      Swal.fire({
+                        icon: "warning",
+                        title: "Some Canvas columns weren't matched",
+                        html:
+                          "These columns were left blank — no matching assignment/grade step was found:<br><br><b>" +
+                          unmatched.map((c) => c.replace(/</g, "&lt;")).join("<br>") +
+                          "</b><br><br>Rename the assignment in Shot Tracker to match Canvas, or fill them in manually.",
+                      });
+                    }
                   })
                   .catch((err) => {
                     console.error("❌ Failed to download:", err);
-                    Swal.fire("Error", "Could not download export.", "error");
+                    Swal.fire("Error", err.message || "Could not download export.", "error");
                   });
               }}
 
