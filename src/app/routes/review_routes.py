@@ -2679,6 +2679,20 @@ def _build_canvas_grade_data(class_filter):
     conn = get_db()
     cursor = conn.cursor()
 
+    # Resolve the current semester the same way the class picker does, so an
+    # old section that shares a class name isn't pulled in.
+    term_order = {"WINTER": 0, "SPRING": 1, "SUMMER": 2, "FALL": 3}
+    sem_rows = cursor.execute("SELECT id, year, term FROM semesters").fetchall()
+    current_sem_id = None
+    if sem_rows:
+        current_sem_id = max(
+            sem_rows,
+            key=lambda r: (
+                int(r["year"]) if r["year"] is not None else 0,
+                term_order.get((r["term"] or "").strip().upper(), 0),
+            ),
+        )["id"]
+
     sql = """
     SELECT
         c.class_name,
@@ -2693,19 +2707,26 @@ def _build_canvas_grade_data(class_filter):
     JOIN users u ON ia.users_id = u.id
     JOIN assignments a ON ia.assignment_id = a.id
     JOIN classes c ON a.class_id = c.id
-    -- Only students currently enrolled in this specific class
-    JOIN class_enrollments ce ON ce.user_id = u.id AND ce.class_id = c.id
+    -- Only students enrolled in THIS class for the current semester
+    JOIN class_enrollments ce
+        ON ce.user_id = u.id
+       AND ce.class_id = c.id
+       AND (ce.semester_id = c.semester_id OR ce.semester_id IS NULL)
     JOIN individual_assignment_statuses ias ON ia.id = ias.individual_assignment_id
     JOIN steps s ON ias.step_id = s.id
     WHERE s.name LIKE 'Grade%'
+      AND COALESCE(c.archived, 0) = 0
     """
-    params = ()
+    params = []
+    if current_sem_id is not None:
+        sql += " AND c.semester_id = ?"
+        params.append(current_sem_id)
     if class_filter:
         sql += " AND c.class_name = ?"
-        params = (class_filter,)
+        params.append(class_filter)
     sql += " ORDER BY u.name, a.name, s.name"
 
-    rows = cursor.execute(sql, params).fetchall()
+    rows = cursor.execute(sql, tuple(params)).fetchall()
     if not rows:
         return None, [], {}
 
