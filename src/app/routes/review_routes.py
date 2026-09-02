@@ -2693,6 +2693,8 @@ def _build_canvas_grade_data(class_filter):
     JOIN users u ON ia.users_id = u.id
     JOIN assignments a ON ia.assignment_id = a.id
     JOIN classes c ON a.class_id = c.id
+    -- Only students currently enrolled in this specific class
+    JOIN class_enrollments ce ON ce.user_id = u.id AND ce.class_id = c.id
     JOIN individual_assignment_statuses ias ON ia.id = ias.individual_assignment_id
     JOIN steps s ON ias.step_id = s.id
     WHERE s.name LIKE 'Grade%'
@@ -2719,11 +2721,18 @@ def _build_canvas_grade_data(class_filter):
     by_student = {}
     alias_map = {}
 
+    counted = set()  # (student, assignment, step) already applied — guards pose double-count
     for r in rows:
         key = r["login"] or r["student_name"]
         st = by_student.setdefault(
             key, {"name": r["student_name"], "login": r["login"], "aliases": {}}
         )
+
+        dedupe_key = (key, r["assignment_name"], r["step_name"])
+        if dedupe_key in counted:
+            continue
+        counted.add(dedupe_key)
+
         numeric = _canvas_extract_numeric(r["grade"])
 
         if r["parent_step_id"] == POSE_PARENT_STEP_ID:
