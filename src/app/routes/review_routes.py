@@ -2702,6 +2702,7 @@ def _build_canvas_grade_data(class_filter):
         a.name AS assignment_name,
         a.parent_step_id,
         s.name AS step_name,
+        COALESCE(s.order_num, 0) AS step_order,
         ias.current_status AS grade
     FROM individual_assignments ia
     JOIN users u ON ia.users_id = u.id
@@ -2724,7 +2725,7 @@ def _build_canvas_grade_data(class_filter):
     if class_filter:
         sql += " AND c.class_name = ?"
         params.append(class_filter)
-    sql += " ORDER BY u.name, a.name, s.name"
+    sql += " ORDER BY u.name, a.id, step_order"
 
     rows = cursor.execute(sql, tuple(params)).fetchall()
     if not rows:
@@ -2732,71 +2733,55 @@ def _build_canvas_grade_data(class_filter):
 
     class_name = rows[0]["class_name"]
 
-    # How many grade steps does each non-pose assignment have? A single-step
-    # assignment can also be matched by its bare name ("Walk Entire Character").
-    step_counts = {}
+    # One grade column per assignment, labelled with the assignment name.
+    #   - pose assignments (parent_step_id 342): SUM their grade steps
+    #     (Grade Pose 1 + Grade Pose 2)
+    #   - every other assignment: take ONLY its final grade step (highest
+    #     step order_num, e.g. Grade-Polish), so "Audio Shot - Grade-Polish"
+    #     becomes just "Audio Shot".
+    final_step = {}  # assignment_name -> (step_order, step_name)
     for r in rows:
-        if r["parent_step_id"] != POSE_PARENT_STEP_ID:
-            step_counts.setdefault(r["assignment_name"], set()).add(r["step_name"])
+        if r["parent_step_id"] == POSE_PARENT_STEP_ID:
+            continue
+        a = r["assignment_name"]
+        if a not in final_step or r["step_order"] > final_step[a][0]:
+            final_step[a] = (r["step_order"], r["step_name"])
 
     by_student = {}
-    alias_map = {}       # alias_norm -> canonical column label (diagnostics / fallback)
-    columns = []         # ordered list of canonical column labels
+    alias_map = {}       # alias_norm -> column label (diagnostics / template match)
+    columns = []         # ordered list of column labels
 
     counted = set()  # (student, assignment, step) already applied — guards pose double-count
     for r in rows:
+        a_name = r["assignment_name"]
+        is_pose = r["parent_step_id"] == POSE_PARENT_STEP_ID
+
+        if not is_pose and r["step_name"] != final_step[a_name][1]:
+            continue  # non-final grade step — skip
+
         key = r["login"] or r["student_name"]
         st = by_student.setdefault(
             key,
             {"name": r["student_name"], "login": r["login"], "aliases": {}, "values": {}},
         )
 
-        dedupe_key = (key, r["assignment_name"], r["step_name"])
+        dedupe_key = (key, a_name, r["step_name"])
         if dedupe_key in counted:
             continue
         counted.add(dedupe_key)
 
         numeric = _canvas_extract_numeric(r["grade"])
-        a_name = r["assignment_name"]
 
-        if r["parent_step_id"] == POSE_PARENT_STEP_ID:
-            canon = a_name                    # e.g. "Pose #1" -- steps are summed
-            match_labels = [a_name]
-            combine = True
+        if a_name not in columns:
+            columns.append(a_name)
+        alias_map.setdefault(_canvas_norm(a_name), a_name)
+
+        if is_pose:
+            st["values"][a_name] = st["values"].get(a_name, 0) + numeric
+            st["aliases"][_canvas_norm(a_name)] = st["values"][a_name]
         else:
-            step = r["step_name"]
-            # Canvas assignment titles vary: "Audio Shot - Grade-Blocking Plus",
-            # "Two Person - Blocking", "Audio Shot Blocking Plus". The canonical
-            # column drops the "Grade-"/"Grade " prefix; matching also accepts
-            # the full name and the no-dash form.
-            clean = re.sub(r"^\s*grade\s*[-\s]\s*", "", step, flags=re.I).strip()
-            single_step = len(step_counts.get(a_name, ())) == 1
-            canon = a_name if single_step else f"{a_name} - {clean}"
-            match_labels = [
-                canon,
-                f"{a_name} - {clean}",
-                f"{a_name} - {step}",
-                f"{a_name} {clean}",
-            ]
-            if single_step:
-                match_labels.append(a_name)
-            combine = False
-
-        if canon not in columns:
-            columns.append(canon)
-
-        if combine:
-            st["values"][canon] = st["values"].get(canon, 0) + numeric
-        else:
-            st["values"][canon] = numeric
-
-        for label in dict.fromkeys(match_labels):
-            alias = _canvas_norm(label)
-            alias_map.setdefault(alias, canon)
-            if combine:
-                st["aliases"][alias] = st["aliases"].get(alias, 0) + numeric
-            else:
-                st["aliases"][alias] = numeric
+            st["values"][a_name] = numeric
+            st["aliases"][_canvas_norm(a_name)] = numeric
 
     return class_name, list(by_student.values()), alias_map, columns
 
