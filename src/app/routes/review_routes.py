@@ -2740,13 +2740,15 @@ def _build_canvas_grade_data(class_filter):
             step_counts.setdefault(r["assignment_name"], set()).add(r["step_name"])
 
     by_student = {}
-    alias_map = {}
+    alias_map = {}       # alias_norm -> canonical column label (diagnostics / fallback)
+    columns = []         # ordered list of canonical column labels
 
     counted = set()  # (student, assignment, step) already applied — guards pose double-count
     for r in rows:
         key = r["login"] or r["student_name"]
         st = by_student.setdefault(
-            key, {"name": r["student_name"], "login": r["login"], "aliases": {}}
+            key,
+            {"name": r["student_name"], "login": r["login"], "aliases": {}, "values": {}},
         )
 
         dedupe_key = (key, r["assignment_name"], r["step_name"])
@@ -2755,36 +2757,48 @@ def _build_canvas_grade_data(class_filter):
         counted.add(dedupe_key)
 
         numeric = _canvas_extract_numeric(r["grade"])
+        a_name = r["assignment_name"]
 
         if r["parent_step_id"] == POSE_PARENT_STEP_ID:
-            labels = [r["assignment_name"]]  # e.g. "Pose #1" -- steps are summed
+            canon = a_name                    # e.g. "Pose #1" -- steps are summed
+            match_labels = [a_name]
             combine = True
         else:
-            a_name = r["assignment_name"]
             step = r["step_name"]
             # Canvas assignment titles vary: "Audio Shot - Grade-Blocking Plus",
-            # "Two Person - Blocking", "Audio Shot Blocking Plus". Register the
-            # full label plus variants with the "Grade-"/"Grade " prefix dropped,
-            # joined by both " - " and " ".
+            # "Two Person - Blocking", "Audio Shot Blocking Plus". The canonical
+            # column drops the "Grade-"/"Grade " prefix; matching also accepts
+            # the full name and the no-dash form.
             clean = re.sub(r"^\s*grade\s*[-\s]\s*", "", step, flags=re.I).strip()
-            labels = [
-                f"{a_name} - {step}",
+            single_step = len(step_counts.get(a_name, ())) == 1
+            canon = a_name if single_step else f"{a_name} - {clean}"
+            match_labels = [
+                canon,
                 f"{a_name} - {clean}",
+                f"{a_name} - {step}",
                 f"{a_name} {clean}",
             ]
-            if len(step_counts.get(a_name, ())) == 1:
-                labels.append(a_name)
+            if single_step:
+                match_labels.append(a_name)
             combine = False
 
-        for label in dict.fromkeys(labels):
+        if canon not in columns:
+            columns.append(canon)
+
+        if combine:
+            st["values"][canon] = st["values"].get(canon, 0) + numeric
+        else:
+            st["values"][canon] = numeric
+
+        for label in dict.fromkeys(match_labels):
             alias = _canvas_norm(label)
-            alias_map.setdefault(alias, label)
+            alias_map.setdefault(alias, canon)
             if combine:
                 st["aliases"][alias] = st["aliases"].get(alias, 0) + numeric
             else:
                 st["aliases"][alias] = numeric
 
-    return class_name, list(by_student.values()), alias_map
+    return class_name, list(by_student.values()), alias_map, columns
 
 
 def _match_canvas_column(col_norm, alias_map):
@@ -2816,7 +2830,7 @@ def export_canvas_csv():
     class_filter = request.args.get("class") or request.form.get("class")
     template_file = request.files.get("template") if request.method == "POST" else None
 
-    class_name, students, alias_map = _build_canvas_grade_data(class_filter)
+    class_name, students, alias_map, columns = _build_canvas_grade_data(class_filter)
     if class_name is None:
         return jsonify({"error": "No grade rows found", "class_filter": class_filter}), 404
 
@@ -2917,21 +2931,15 @@ def export_canvas_csv():
         return _send(out.getvalue(), unmatched=unmatched, matched=matched)
 
     # ---- Fallback mode (no template) --------------------------------------
-    col_labels = []
-    seen = set()
-    for label in alias_map.values():
-        if label not in seen:
-            col_labels.append(label)
-            seen.add(label)
-
+    # One column per grade value, "Grade-" prefix dropped from the label.
     out = io.StringIO(newline="")
     writer = csv.writer(out, lineterminator="\r\n")
-    writer.writerow(["Student", "ID", "SIS User ID", "SIS Login ID", "Section", *col_labels])
-    writer.writerow(["    Points Possible", "", "", "", "", *["" for _ in col_labels]])
+    writer.writerow(["Student", "ID", "SIS User ID", "SIS Login ID", "Section", *columns])
+    writer.writerow(["    Points Possible", "", "", "", "", *["" for _ in columns]])
     for s in students:
         row_out = [s["name"], "", "", s["login"], class_name]
-        for label in col_labels:
-            val = s["aliases"].get(_canvas_norm(label))
+        for col in columns:
+            val = s["values"].get(col)
             row_out.append(_fmt_num(val) if val is not None else "")
         writer.writerow(row_out)
 
