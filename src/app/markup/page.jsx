@@ -2951,7 +2951,7 @@ export default function MarkupTool() {
 
             className="px-2 py-1 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded-md"
           >
-            📥 Export Grades FOOL
+            📥 Export Grades
           </button>
           </div>
 
