@@ -2760,12 +2760,23 @@ def _build_canvas_grade_data(class_filter):
             labels = [r["assignment_name"]]  # e.g. "Pose #1" -- steps are summed
             combine = True
         else:
-            labels = [f"{r['assignment_name']} - {r['step_name']}"]
-            if len(step_counts.get(r["assignment_name"], ())) == 1:
-                labels.append(r["assignment_name"])
+            a_name = r["assignment_name"]
+            step = r["step_name"]
+            # Canvas assignment titles vary: "Audio Shot - Grade-Blocking Plus",
+            # "Two Person - Blocking", "Audio Shot Blocking Plus". Register the
+            # full label plus variants with the "Grade-"/"Grade " prefix dropped,
+            # joined by both " - " and " ".
+            clean = re.sub(r"^\s*grade\s*[-\s]\s*", "", step, flags=re.I).strip()
+            labels = [
+                f"{a_name} - {step}",
+                f"{a_name} - {clean}",
+                f"{a_name} {clean}",
+            ]
+            if len(step_counts.get(a_name, ())) == 1:
+                labels.append(a_name)
             combine = False
 
-        for label in labels:
+        for label in dict.fromkeys(labels):
             alias = _canvas_norm(label)
             alias_map.setdefault(alias, label)
             if combine:
